@@ -98,3 +98,78 @@ All tests pass successfully, confirming that:
 - Input fields have proper contrast in both light and dark modes
 - The white-on-white text bug is resolved
 - All form elements (input, textarea, select) are properly styled
+
+### Ticket VAL-202: Date of Birth Validation
+
+#### Root Cause
+
+The issue was caused by missing validation for date of birth input in the signup form. The form only checked that the date field was required, but did not validate:
+1. That the date was not in the future (allowing dates like 2025 to be accepted)
+2. That the user was at least 18 years old (critical for banking compliance)
+3. That the date format was valid and the date itself was valid (e.g., rejecting Feb 30)
+
+The root cause was in `app/signup/page.tsx`, where the date of birth input field only had a `required` validation rule but lacked comprehensive date validation logic.
+
+#### Solution
+
+Created a dedicated validation function `validateDateOfBirth` in `lib/validation/dateOfBirth.ts` and integrated it into the signup form. The validation function:
+
+1. **Validates date format**: Ensures the date matches YYYY-MM-DD format
+2. **Validates date validity**: Checks that the date is actually valid (e.g., rejects Feb 30, month 13, etc.)
+3. **Rejects future dates**: Prevents dates in the future (fixes the main bug where 2025 was accepted)
+4. **Enforces age requirement**: Calculates age and ensures the user is at least 18 years old
+5. **Handles edge cases**: Properly handles leap years, birthday calculations, and timezone issues
+
+The validation is integrated into the signup form at `app/signup/page.tsx`:
+
+```typescript
+<input
+  {...register("dateOfBirth", {
+    required: "Date of birth is required",
+    validate: validateDateOfBirth,
+  })}
+  type="date"
+  className="..."
+/>
+```
+
+This ensures that:
+- Future dates are rejected with a clear error message
+- Users under 18 are rejected (critical for banking compliance)
+- Invalid dates and formats are caught before submission
+- The validation is centralized and reusable
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Comprehensive Input Validation**: Always validate date inputs beyond just checking if they're required - validate format, validity, and business rules
+2. **Centralized Validation Logic**: Create reusable validation functions rather than inline validation rules, making them easier to test and maintain
+3. **Age Verification**: For financial applications, always verify age requirements server-side as well as client-side
+4. **Date Handling Best Practices**: Use UTC dates for age calculations to avoid timezone issues, and always validate that parsed dates match input dates
+5. **Compliance Awareness**: For regulated industries like banking, ensure validation rules meet regulatory requirements (e.g., minimum age, KYC compliance)
+6. **Edge Case Testing**: Test edge cases like leap years, birthday calculations, timezone boundaries, and boundary conditions (exactly 18, exactly 18+1 day, etc.)
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/date-of-birth-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 27 test cases organized into 6 categories:
+
+1. **Future Date Validation (Main Bug Fix)**: 4 tests that verify future dates like 2025 are rejected
+2. **Age Validation (18+ Requirement)**: 5 tests that verify users under 18 are rejected and valid ages are accepted
+3. **Date Format Validation**: 6 tests that verify various invalid formats are rejected
+4. **Invalid Date Validation**: 6 tests that verify invalid dates (Feb 30, month 13, etc.) are rejected
+5. **Edge Cases**: 4 tests that handle birthday today, tomorrow, very old dates, and leap years
+6. **Compliance and Security**: 2 tests that ensure minors and future dates are prevented (critical for banking compliance)
+
+**Test Results:**
+
+All 27 tests pass successfully, confirming that:
+- Future dates (including 2025) are properly rejected
+- Users under 18 years old are rejected (critical for compliance)
+- Invalid date formats and invalid dates are caught
+- Edge cases are handled correctly (leap years, birthday calculations, etc.)
+- The validation prevents the original bug from recurring

@@ -121,7 +121,8 @@ describe('Dark Mode Input Visibility (UI-101)', () => {
         const styles = getComputedStyles(input)
 
         // Verify light mode styles
-        expect(styles.backgroundColor).toBe('rgb(255, 255, 255)') // white
+        // Browser may return "white" or "rgb(255, 255, 255)" - both are correct
+        expect(styles.backgroundColor === 'rgb(255, 255, 255)' || styles.backgroundColor === 'white').toBe(true)
         expect(styles.color).toBe('rgb(23, 23, 23)') // #171717
 
         document.body.removeChild(input)
@@ -136,8 +137,10 @@ describe('Dark Mode Input Visibility (UI-101)', () => {
         input.style.color = 'white'
 
         let styles = getComputedStyles(input)
-        const bugCondition = styles.backgroundColor === styles.color &&
-            styles.backgroundColor === 'rgb(255, 255, 255)'
+        // Check if both background and text are white (the bug condition)
+        // Browser may return "white" or "rgb(255, 255, 255)" - handle both
+        const isWhite = (color: string) => color === 'rgb(255, 255, 255)' || color === 'white'
+        const bugCondition = isWhite(styles.backgroundColor) && isWhite(styles.color)
         expect(bugCondition).toBe(true) // This is the bug condition
 
         // Now apply the fix: dark background with light text

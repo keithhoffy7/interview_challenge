@@ -470,3 +470,93 @@ All 15 tests pass successfully, confirming that:
 - The hashing uses secure bcrypt algorithm with proper salt rounds
 - SSNs cannot be extracted from database dumps
 - The fix prevents the original security vulnerability from recurring
+
+### Ticket SEC-303: XSS Vulnerability
+
+#### Root Cause
+
+The issue was caused by using `dangerouslySetInnerHTML` to render transaction descriptions in the UI. This React API directly injects HTML into the DOM without sanitization, creating a critical cross-site scripting (XSS) vulnerability:
+
+1. **Unescaped HTML Rendering**: Transaction descriptions were rendered using `dangerouslySetInnerHTML`, which allows any HTML/JavaScript in the description to be executed
+2. **No Input Sanitization**: User-controlled or database-stored content containing HTML tags could be executed as code
+3. **Attack Vector**: Malicious actors could inject script tags, event handlers, or other HTML that executes JavaScript in users' browsers
+4. **Impact**: Could lead to cookie theft, session hijacking, DOM manipulation, or other malicious actions
+
+The root cause was in `components/TransactionList.tsx` on line 71:
+
+```typescript
+{transaction.description ? <span dangerouslySetInnerHTML={{ __html: transaction.description }} /> : "-"}
+```
+
+This allowed any HTML in transaction descriptions to be rendered and executed, creating a severe security vulnerability.
+
+#### Solution
+
+Created a dedicated HTML escaping utility `lib/security/escapeHtml.ts` and replaced `dangerouslySetInnerHTML` with safe text rendering. The solution:
+
+1. **HTML Escaping Function**: Created `escapeHtml()` that converts dangerous HTML characters to their safe HTML entity equivalents:
+   - `<` → `&lt;`
+   - `>` → `&gt;`
+   - `&` → `&amp;`
+   - `"` → `&quot;`
+   - `'` → `&#039;`
+
+2. **Safe Rendering**: Replaced `dangerouslySetInnerHTML` with direct text rendering after escaping
+
+3. **Prevents XSS**: All HTML tags and special characters are escaped, preventing script execution
+
+The fix is integrated into the TransactionList component at `components/TransactionList.tsx`:
+
+```typescript
+import { escapeHtml } from "@/lib/security/escapeHtml";
+
+// Before (vulnerable):
+{transaction.description ? <span dangerouslySetInnerHTML={{ __html: transaction.description }} /> : "-"}
+
+// After (secure):
+{transaction.description ? escapeHtml(transaction.description) : "-"}
+```
+
+This ensures that:
+- All HTML tags are escaped and rendered as text, not executed
+- Script tags, event handlers, and other malicious HTML cannot execute
+- Transaction descriptions are safely displayed without XSS risk
+- The escaping is centralized and reusable across the application
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Never Use dangerouslySetInnerHTML**: Avoid `dangerouslySetInnerHTML` unless absolutely necessary and with proper sanitization
+2. **Always Escape User Input**: Escape or sanitize all user-controlled content before rendering
+3. **Use React's Built-in Escaping**: React automatically escapes content in JSX - use it instead of `dangerouslySetInnerHTML`
+4. **Content Security Policy (CSP)**: Implement CSP headers to provide an additional layer of XSS protection
+5. **Input Validation**: Validate and sanitize input at the server level before storing in the database
+6. **Use Sanitization Libraries**: For cases where HTML is needed, use trusted libraries like DOMPurify
+7. **Security Testing**: Regularly test for XSS vulnerabilities using tools and manual testing
+8. **Code Reviews**: Include XSS prevention in security-focused code reviews
+9. **Security Headers**: Implement security headers (X-XSS-Protection, Content-Security-Policy) for defense in depth
+10. **OWASP Guidelines**: Follow OWASP guidelines for preventing XSS attacks
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/xss-prevention.test.tsx`.
+
+**Test Coverage:**
+
+The test suite includes 25 test cases organized into 5 categories:
+
+1. **HTML Escaping**: 6 tests that verify all HTML special characters are properly escaped
+2. **XSS Attack Vectors**: 7 tests that verify common XSS attack vectors are prevented (script tags, event handlers, iframes, javascript: protocol, etc.)
+3. **Real-World XSS Scenarios**: 5 tests that handle transaction descriptions with HTML and mixed content
+4. **Edge Cases**: 4 tests that handle nested HTML, attributes, multiple occurrences, and unicode
+5. **Security Verification**: 3 tests that verify JavaScript cannot be executed, cookie theft is prevented, and DOM manipulation is blocked
+
+**Test Results:**
+
+All 25 tests pass successfully, confirming that:
+- HTML tags are properly escaped and cannot execute
+- Script tags, event handlers, and other XSS vectors are neutralized
+- Transaction descriptions are safely rendered without XSS risk
+- Various attack payloads are properly escaped
+- The fix prevents the original XSS vulnerability from recurring

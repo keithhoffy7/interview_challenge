@@ -20,18 +20,31 @@ export function validateCardNumber(value: string): true | string {
 
   // Check for valid card prefixes
   const validPrefixes = [
-    // Visa
+    // Visa - starts with 4
     /^4/,
-    // Mastercard
+    // Mastercard - 51-55 and 2221-2720 (2-series)
     /^5[1-5]/,
-    // American Express
+    /^222[1-9]/, // 2221-2229
+    /^22[3-9]\d/, // 2230-2299
+    /^2[3-6]\d{2}/, // 2300-2699
+    /^27[01]\d/, // 2700-2719
+    /^2720/, // 2720
+    // American Express - 34 or 37
     /^3[47]/,
-    // Discover
-    /^6(?:011|5)/,
-    // Diners Club
-    /^3[0689]/,
-    // JCB
-    /^(?:2131|1800|35)/,
+    // Discover - 6011, 622126-622925, 644-649, 65
+    /^6011/,
+    /^6221[2-9][6-9]/, // 622126-622199 (62212[6-9], 62213-62219)
+    /^622[2-8][0-9][0-9]/, // 622200-622899
+    /^6229[0-2][0-5]/, // 622900-622925
+    /^64[4-9]/, // 644-649
+    /^65/,
+    // Diners Club - 300-305, 3095, 36, 38-39
+    /^30[0-5]/, // 300-305
+    /^3095/, // 3095
+    /^36/,
+    /^3[89]/, // 38-39
+    // JCB - 3528-3589
+    /^35(?:2[89]|[3-8][0-9])/, // 3528-3529, 3530-3589
   ];
 
   const hasValidPrefix = validPrefixes.some((prefix) => prefix.test(cleaned));

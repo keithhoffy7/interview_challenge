@@ -85,6 +85,14 @@ export const accountRouter = router({
     .mutation(async ({ input, ctx }) => {
       const amount = parseFloat(input.amount.toString());
 
+      // Validate amount is positive (greater than 0)
+      if (amount <= 0 || isNaN(amount)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Amount must be greater than $0.00",
+        });
+      }
+
       // Verify account belongs to user
       const account = await db
         .select()

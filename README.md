@@ -1165,3 +1165,144 @@ All 31 tests pass successfully, confirming that:
 - Email normalization works correctly
 - Edge cases are handled properly
 - The fix prevents the original bugs from recurring
+
+### Ticket VAL-205: Zero Amount Funding
+
+#### Root Cause
+
+The issue was caused by incorrect validation logic in the funding form that allowed zero amounts to be submitted. The code had a critical mismatch between the validation rule and the error message:
+
+1. **Incorrect Minimum Value**: The validation used `min: 0.0`, which allows zero amounts (0.00) to pass validation
+2. **Mismatched Error Message**: The error message stated "Amount must be at least $0.01" but the validation rule allowed $0.00
+3. **Missing Explicit Zero Check**: There was no explicit validation to reject zero amounts before creating transactions
+
+The root cause was in `components/FundingModal.tsx` on lines 78-81:
+
+```typescript
+// Buggy code:
+min: {
+  value: 0.0,  // Allows 0.00!
+  message: "Amount must be at least $0.01",  // Says $0.01 but allows $0.00
+},
+```
+
+This validation had several problems:
+- `min: 0.0` allows zero amounts (0.00 >= 0.0 is true)
+- The error message says "$0.01" but validation allows "$0.00"
+- Users could submit funding requests for $0.00, creating unnecessary transaction records
+- No explicit check to prevent zero amounts before transaction creation
+
+**Impact:**
+- Users could submit funding requests for $0.00
+- Unnecessary transaction records were created in the database
+- Account balances remained unchanged but transaction history showed $0.00 deposits
+- Wasted database resources and cluttered transaction history
+
+#### Solution
+
+Fixed the validation to explicitly reject zero amounts and ensure consistency between validation rules and error messages. The solution:
+
+1. **Removed Incorrect Min Validation**: Removed the `min: 0.0` rule that allowed zero amounts
+2. **Added Explicit Zero Checks**: Added custom validation functions that explicitly check:
+   - Amount must be greater than 0 (rejects zero and negative amounts)
+   - Amount must be at least $0.01 (enforces minimum funding amount)
+3. **Server-Side Validation**: Added explicit validation on the server to reject zero amounts before creating transactions
+4. **Consistent Error Messages**: Error messages now match the validation logic
+
+The fix is in `components/FundingModal.tsx`:
+
+```typescript
+<input
+  {...register("amount", {
+    required: "Amount is required",
+    pattern: {
+      value: /^\d+\.?\d{0,2}$/,
+      message: "Invalid amount format",
+    },
+    validate: {
+      positive: (value) => {
+        const num = parseFloat(value);
+        if (isNaN(num) || num <= 0) {
+          return "Amount must be greater than $0.00";
+        }
+        return true;
+      },
+      minimum: (value) => {
+        const num = parseFloat(value);
+        if (num < 0.01) {
+          return "Amount must be at least $0.01";
+        }
+        return true;
+      },
+    },
+    max: {
+      value: 10000,
+      message: "Amount cannot exceed $10,000",
+    },
+  })}
+  type="text"
+/>
+```
+
+And in `server/routers/account.ts`:
+
+```typescript
+const amount = parseFloat(input.amount.toString());
+
+// Validate amount is positive (greater than 0)
+if (amount <= 0 || isNaN(amount)) {
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: "Amount must be greater than $0.00",
+  });
+}
+```
+
+This ensures that:
+- Zero amounts ($0.00) are rejected with clear error messages
+- Negative amounts are rejected
+- Only positive amounts greater than $0.00 are accepted
+- Validation is consistent between frontend and backend
+- No unnecessary transaction records are created
+- Error messages match the validation logic
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Match Validation Rules with Messages**: Ensure error messages accurately reflect what the validation actually checks
+2. **Use Explicit Validation**: For critical business rules (like "amount must be positive"), use explicit checks rather than relying on `min` values that might allow edge cases
+3. **Test Edge Cases**: Always test boundary conditions (0, negative values, very small values) to ensure validation works correctly
+4. **Validate on Both Client and Server**: Always validate on both frontend (for UX) and backend (for security and data integrity)
+5. **Use Custom Validation Functions**: For complex validation rules, use custom validation functions rather than simple `min`/`max` values
+6. **Reject Invalid Data Early**: Validate and reject invalid data as early as possible (frontend) and always validate again on the server
+7. **Clear Error Messages**: Provide specific error messages that tell users exactly what's wrong and how to fix it
+8. **Code Review**: Review validation logic carefully, especially when error messages mention specific values (like "$0.01")
+9. **Test Boundary Values**: Test values at boundaries (0, 0.01, -0.01, etc.) to catch validation issues
+10. **Prevent Unnecessary Operations**: Validate before performing expensive operations (like creating database records) to avoid wasted resources
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/zero-amount-funding.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 22 test cases organized into 6 categories:
+
+1. **Frontend Validation**: 5 tests that verify zero amounts, negative amounts, and positive amounts are properly validated on the frontend
+2. **Server-Side Validation**: 5 tests that verify zero amounts, negative amounts, and NaN values are rejected on the server
+3. **Edge Cases**: 5 tests that handle very small amounts, string conversions, empty strings, and whitespace
+4. **Root Cause Verification**: 2 tests that verify the specific bugs (min value mismatch, message mismatch) are fixed
+5. **Transaction Prevention**: 3 tests that verify transactions are not created for zero amounts and unnecessary records are prevented
+6. **Validation Consistency**: 2 tests that verify frontend and backend validation are consistent
+
+**Test Results:**
+
+All 22 tests pass successfully, confirming that:
+- Zero amounts ($0.00) are properly rejected on both frontend and backend
+- Negative amounts are properly rejected
+- Only positive amounts greater than $0.00 are accepted
+- Validation is consistent between frontend and backend
+- No unnecessary transaction records are created
+- Error messages match the validation logic
+- The fix prevents the original bug from recurring

@@ -75,9 +75,21 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
                     value: /^\d+\.?\d{0,2}$/,
                     message: "Invalid amount format",
                   },
-                  min: {
-                    value: 0.0,
-                    message: "Amount must be at least $0.01",
+                  validate: {
+                    positive: (value) => {
+                      const num = parseFloat(value);
+                      if (isNaN(num) || num <= 0) {
+                        return "Amount must be greater than $0.00";
+                      }
+                      return true;
+                    },
+                    minimum: (value) => {
+                      const num = parseFloat(value);
+                      if (num < 0.01) {
+                        return "Amount must be at least $0.01";
+                      }
+                      return true;
+                    },
                   },
                   max: {
                     value: 10000,

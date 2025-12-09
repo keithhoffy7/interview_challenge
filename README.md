@@ -274,3 +274,100 @@ All 51 tests pass successfully, confirming that:
 - Format variations (spaces, dashes) are handled correctly
 - Invalid formats, lengths, and prefixes are caught
 - The validation prevents the original bug from recurring
+
+### Ticket VAL-208: Weak Password Requirements
+
+#### Root Cause
+
+The issue was caused by weak password validation in the signup form. The validation only checked:
+1. Minimum length of 8 characters
+2. Presence of at least one number
+3. Rejection of a very small list of common passwords (only 3 passwords: "password", "12345678", "qwerty")
+
+This allowed many weak passwords to be accepted, including:
+- Passwords with only lowercase letters and numbers (missing uppercase)
+- Passwords with only uppercase letters and numbers (missing lowercase)
+- Passwords without special characters
+- Common passwords not in the small exclusion list
+- Passwords with sequential patterns (e.g., "abcdefgh", "12345678")
+- Passwords with repeated characters (e.g., "aaaa", "1111")
+
+The root cause was in `app/signup/page.tsx`, where the password validation used only basic checks without enforcing proper complexity requirements that are standard for financial applications.
+
+#### Solution
+
+Created a dedicated validation function `validatePassword` in `lib/validation/password.ts` and integrated it into the signup form. The validation function enforces:
+
+1. **Minimum length**: At least 8 characters
+2. **Uppercase requirement**: At least one uppercase letter (A-Z)
+3. **Lowercase requirement**: At least one lowercase letter (a-z)
+4. **Number requirement**: At least one digit (0-9)
+5. **Special character requirement**: At least one special character (!@#$%^&*()_+-=[]{}|;':"\\,.<>/?)
+6. **Common password rejection**: Checks against an expanded list of 24 common passwords
+7. **Sequential pattern rejection**: Rejects passwords containing sequential patterns like "abcdefgh", "qwerty", "12345678", etc.
+8. **Repeated character rejection**: Rejects passwords with 4 or more repeated characters
+
+The validation is integrated into the signup form at `app/signup/page.tsx`:
+
+```typescript
+<input
+  {...register("password", {
+    required: "Password is required",
+    validate: validatePassword,
+  })}
+  type="password"
+  className="..."
+/>
+```
+
+This ensures that:
+- Only strong passwords meeting all complexity requirements are accepted
+- Common and predictable passwords are rejected
+- Sequential patterns and excessive repetition are caught
+- The validation provides clear, specific error messages for each requirement
+- The validation is centralized and reusable
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Enforce Password Complexity**: Always require a mix of uppercase, lowercase, numbers, and special characters for financial applications
+2. **Use Industry Standards**: Follow NIST guidelines or OWASP recommendations for password policies
+3. **Comprehensive Common Password Lists**: Maintain and regularly update lists of common passwords to reject
+4. **Pattern Detection**: Implement checks for sequential patterns, keyboard patterns, and repeated characters
+5. **Server-Side Validation**: Always validate passwords server-side as well, as client-side validation can be bypassed
+6. **Password Strength Meter**: Consider adding a visual password strength indicator to help users create stronger passwords
+7. **Rate Limiting**: Implement rate limiting on password attempts to prevent brute force attacks
+8. **Password History**: For sensitive applications, consider preventing reuse of recent passwords
+9. **Clear Error Messages**: Provide specific feedback about which requirements are missing to help users create valid passwords
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/password-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 49 test cases organized into 9 categories:
+
+1. **Valid Passwords**: 5 tests that verify strong passwords meeting all requirements are accepted
+2. **Length Validation**: 3 tests that verify minimum length requirements
+3. **Uppercase Letter Requirement**: 3 tests that verify uppercase letter requirements
+4. **Lowercase Letter Requirement**: 2 tests that verify lowercase letter requirements
+5. **Number Requirement**: 3 tests that verify number requirements
+6. **Special Character Requirement**: 7 tests that verify special character requirements and various special characters
+7. **Common Password Rejection**: 5 tests that verify common passwords are rejected
+8. **Sequential Pattern Rejection**: 5 tests that verify sequential patterns are rejected
+9. **Repeated Character Rejection**: 4 tests that verify excessive repetition is rejected
+10. **Multiple Requirement Failures**: 5 tests that verify error prioritization when multiple requirements fail
+11. **Edge Cases**: 4 tests that handle various edge cases
+12. **Security Best Practices**: 3 tests that verify security best practices are enforced
+
+**Test Results:**
+
+All 49 tests pass successfully, confirming that:
+- Strong passwords meeting all complexity requirements are accepted
+- Weak passwords are properly rejected (critical for account security)
+- All complexity requirements (uppercase, lowercase, numbers, special characters) are enforced
+- Common passwords, sequential patterns, and repeated characters are caught
+- Clear error messages guide users to create valid passwords
+- The validation prevents the original bug from recurring

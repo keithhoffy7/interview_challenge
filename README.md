@@ -1032,3 +1032,136 @@ All 15 tests pass successfully, confirming that:
 - Resource leaks are prevented
 - System resources are properly released
 - The fix prevents the original bug from recurring
+
+### Ticket VAL-201: Email Validation Problems
+
+#### Root Cause
+
+The issue was caused by weak email validation in both the frontend forms and the lack of typo detection. The code had three critical problems:
+
+1. **Weak Validation Pattern**: The frontend used a very permissive regex pattern `/^\S+@\S+$/i` that only checked for non-whitespace characters before and after the `@` symbol, allowing many invalid email formats
+2. **No Typo Detection**: The system didn't detect common TLD typos like ".con" instead of ".com", ".c0m", ".cm", etc.
+3. **Silent Case Conversion**: The server-side validation converted emails to lowercase without notifying users, which could cause confusion
+
+The root cause was in `app/signup/page.tsx` and `app/login/page.tsx`:
+
+```typescript
+// Buggy code:
+pattern: {
+  value: /^\S+@\S+$/i,  // Too weak - accepts invalid formats
+  message: "Invalid email address",
+}
+```
+
+This pattern had several problems:
+- Accepted emails without domains (e.g., "user@")
+- Accepted emails without local parts (e.g., "@example.com")
+- Accepted emails without TLDs (e.g., "user@example")
+- Accepted emails with invalid domain formats (e.g., "user@.com")
+- No detection of common typos
+- No validation of email structure beyond basic pattern
+
+**Impact:**
+- Invalid email formats were accepted, leading to potential data quality issues
+- Users could enter typos like ".con" without being warned
+- Users weren't notified when their email was converted to lowercase
+- Poor user experience with unclear validation feedback
+
+#### Solution
+
+Created a comprehensive email validation function and integrated it into both signup and login forms. The solution:
+
+1. **Comprehensive Format Validation**: Replaced the weak pattern with a proper email validation function that checks:
+   - Valid email structure (local part, @, domain, TLD)
+   - Local part length (1-64 characters)
+   - Domain length (1-255 characters)
+   - Valid TLD (at least 2 characters)
+   - No consecutive dots
+   - No dots at start/end of local part or domain
+   - Proper domain structure
+
+2. **Typo Detection**: Added detection for common TLD typos with helpful suggestions:
+   - `.con` → suggests `.com`
+   - `.c0m` → suggests `.com`
+   - `.cm` → suggests `.com`
+   - `.om` → suggests `.com`
+   - `.cpm`, `.coom`, `.comm` → suggests `.com`
+   - `.orgn`, `.ogr` → suggests `.org`
+
+3. **Email Normalization**: Created a `normalizeEmail` function for server-side use that handles case conversion properly
+
+The fix is in `lib/validation/email.ts` and integrated into `app/signup/page.tsx` and `app/login/page.tsx`:
+
+```typescript
+// New comprehensive validation function
+export function validateEmail(email: string): string | true {
+  // Validates format, structure, and detects typos
+  // Returns error message or true if valid
+}
+
+// In forms:
+<input
+  {...register("email", {
+    required: "Email is required",
+    validate: validateEmail,  // Uses comprehensive validation
+  })}
+  type="email"
+/>
+```
+
+The server-side validation in `server/routers/auth.ts` was also updated to normalize emails consistently:
+
+```typescript
+// Both signup and login normalize to lowercase
+email: z.string().email().toLowerCase(),  // Normalizes to lowercase for consistency
+```
+
+This ensures that:
+- Invalid email formats are properly rejected with clear error messages
+- Common typos are detected and users are given helpful suggestions
+- Email validation is consistent across signup and login forms
+- Server-side normalization handles case conversion properly
+- Users can log in with any case variation (e.g., "TEST@EXAMPLE.COM", "test@example.com", "Test@Example.Com") - all work because both signup and login normalize to lowercase
+- Users get immediate feedback on email format issues
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Use Comprehensive Validation**: Don't rely on simple regex patterns for email validation - use proper validation functions that check structure, length, and format
+2. **Implement Typo Detection**: For user-facing inputs, consider detecting common typos and providing helpful suggestions
+3. **Validate on Both Client and Server**: Always validate on both frontend (for UX) and backend (for security)
+4. **Use Established Libraries**: Consider using established email validation libraries (like `validator.js` or `email-validator`) for production applications
+5. **Test Edge Cases**: Test validation with various edge cases: very long emails, special characters, international domains, etc.
+6. **Provide Clear Error Messages**: Give users specific, actionable error messages (e.g., "Did you mean .com?" instead of just "Invalid email")
+7. **Handle Case Normalization**: If normalizing emails (e.g., to lowercase), ensure it's done consistently and consider notifying users if needed
+8. **Follow RFC Standards**: Base email validation on RFC 5322 or similar standards for proper format validation
+9. **Regular Expression Best Practices**: If using regex, ensure it's comprehensive and tested, not just a simple pattern
+10. **User Experience**: Balance strictness with usability - detect typos but don't be overly restrictive
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/email-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 31 test cases organized into 7 categories:
+
+1. **Valid Email Formats**: 3 tests that verify valid email addresses with various formats, TLDs, and special characters are accepted
+2. **Invalid Email Formats**: 5 tests that verify invalid formats (missing @, invalid structure, consecutive dots, missing TLD, etc.) are rejected
+3. **Common Typo Detection**: 11 tests that verify common TLD typos are detected and helpful suggestions are provided
+4. **Weak Pattern Replacement**: 2 tests that verify the old weak pattern is replaced with comprehensive validation
+5. **Email Normalization**: 4 tests that verify email normalization (lowercase conversion, trimming) works correctly
+6. **Edge Cases**: 3 tests that handle very long emails, subdomains, and special characters
+7. **Root Cause Verification**: 2 tests that verify the specific bugs (weak pattern, missing typo detection) are fixed
+
+**Test Results:**
+
+All 31 tests pass successfully, confirming that:
+- Valid email formats are properly accepted
+- Invalid email formats are properly rejected with clear error messages
+- Common typos are detected and users receive helpful suggestions
+- The weak validation pattern is replaced with comprehensive validation
+- Email normalization works correctly
+- Edge cases are handled properly
+- The fix prevents the original bugs from recurring

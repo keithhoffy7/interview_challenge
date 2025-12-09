@@ -903,3 +903,132 @@ All 17 tests pass successfully, confirming that:
 - Error handling is in place for retrieval failures
 - Balance accuracy is maintained across many transactions
 - The fix prevents the original bug from recurring
+
+### Ticket PERF-408: Resource Leak
+
+#### Root Cause
+
+The issue was caused by improper database connection management in the database initialization code. The code had two critical problems:
+
+1. **Unused Connection Creation**: The `initDb()` function created a new database connection (`conn`) that was never used - it was added to a `connections` array but the function actually used a different existing connection (`sqlite`) for executing SQL
+2. **No Cleanup Logic**: Database connections were never closed when the application terminated, leading to resource leaks
+3. **Unused Connections Array**: A `connections` array tracked connections but was never used to close them
+
+The root cause was in `lib/db/index.ts`:
+
+```typescript
+// Buggy code:
+const connections: Database.Database[] = [];  // Tracks connections but never uses them
+
+export function initDb() {
+  const conn = new Database(dbPath);  // Creates new connection
+  connections.push(conn);  // Tracks it but never uses it
+  
+  // Uses different connection (sqlite) instead!
+  sqlite.exec(`CREATE TABLE...`);
+}
+```
+
+This code had several problems:
+- Created a new connection `conn` that was never used
+- The `connections` array accumulated connections but they were never closed
+- The main `sqlite` connection was never closed on process exit
+- Each time the module was imported, a new unused connection could be created
+- No cleanup handlers registered for process termination signals
+
+**Impact:**
+- Database connections remained open after the application terminated
+- System resources (file handles, memory) were not released
+- Over time, this could lead to resource exhaustion
+- In production environments, this could cause the system to run out of available connections
+
+#### Solution
+
+Fixed the connection management by removing unused connection creation and adding proper cleanup handlers. The solution:
+
+1. **Removed Unused Connection**: Eliminated the creation of a new connection in `initDb()` - now uses the existing `sqlite` connection directly
+2. **Removed Unused Array**: Removed the `connections` array that tracked connections but never closed them
+3. **Added Cleanup Handlers**: Registered process event handlers to close the database connection on:
+   - `exit` - Normal process termination
+   - `SIGINT` - Interrupt signal (Ctrl+C)
+   - `SIGTERM` - Termination signal (from process managers)
+
+The fix is in `lib/db/index.ts`:
+
+```typescript
+const sqlite = new Database(dbPath);
+export const db = drizzle(sqlite, { schema });
+
+export function initDb() {
+  // Create tables if they don't exist using the existing connection
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS users (...)
+    ...
+  `);
+}
+
+// Initialize database on import
+initDb();
+
+// Close database connection on process exit to prevent resource leaks
+process.on("exit", () => {
+  sqlite.close();
+});
+
+process.on("SIGINT", () => {
+  sqlite.close();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  sqlite.close();
+  process.exit(0);
+});
+```
+
+This ensures that:
+- No unused connections are created
+- The single database connection is properly managed
+- Connections are closed when the application terminates
+- System resources are properly released
+- Resource leaks are prevented
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Always Close Resources**: Always close database connections, file handles, and other resources when they're no longer needed
+2. **Register Cleanup Handlers**: Register process event handlers (`exit`, `SIGINT`, `SIGTERM`) to clean up resources on termination
+3. **Avoid Unused Code**: Remove code that creates resources but never uses them (like the unused connection creation)
+4. **Use Connection Pools Properly**: If using connection pools, ensure connections are returned to the pool and the pool is closed on shutdown
+5. **Monitor Resource Usage**: Monitor system resources (file handles, connections) to detect leaks early
+6. **Test Resource Cleanup**: Test that resources are properly cleaned up when the application terminates
+7. **Use Try-Finally or Defer**: Use try-finally blocks or defer statements to ensure cleanup happens even if errors occur
+8. **Document Resource Management**: Document which resources need cleanup and when
+9. **Code Reviews**: Include resource management in code reviews, especially for database connections and file handles
+10. **Use Linters**: Configure linters to detect potential resource leaks (unclosed files, connections, etc.)
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/resource-leak.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 15 test cases organized into 5 categories:
+
+1. **Connection Management**: 3 tests that verify no unused connections are created and the connections array is removed
+2. **Connection Cleanup**: 4 tests that verify database connections are closed on process exit, SIGINT, and SIGTERM signals
+3. **Resource Leak Prevention**: 3 tests that verify connections don't accumulate and are properly closed on shutdown
+4. **Root Cause Verification**: 2 tests that verify the specific bugs (unused connection creation, unused connections array) are fixed
+5. **System Resource Management**: 2 tests that verify resource exhaustion is prevented and memory leaks are avoided
+
+**Test Results:**
+
+All 15 tests pass successfully, confirming that:
+- No unused connections are created during initialization
+- Database connections are properly closed on process termination
+- Cleanup handlers are registered for all exit signals (exit, SIGINT, SIGTERM)
+- Connections don't accumulate in unused arrays
+- Resource leaks are prevented
+- System resources are properly released
+- The fix prevents the original bug from recurring

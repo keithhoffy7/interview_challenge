@@ -371,3 +371,102 @@ All 49 tests pass successfully, confirming that:
 - Common passwords, sequential patterns, and repeated characters are caught
 - Clear error messages guide users to create valid passwords
 - The validation prevents the original bug from recurring
+
+### Ticket SEC-301: SSN Storage
+
+#### Root Cause
+
+The issue was caused by storing Social Security Numbers (SSNs) in plaintext in the database. SSNs were being stored directly as received from user input without any encryption or hashing, creating a severe security and compliance risk:
+
+1. **Privacy Violation**: SSNs in plaintext can be read by anyone with database access
+2. **Compliance Risk**: Violates regulations like GDPR, CCPA, and financial industry standards (PCI DSS, GLBA)
+3. **Data Breach Impact**: If the database is compromised, all SSNs are immediately exposed
+4. **Identity Theft Risk**: Plaintext SSNs can be used directly for identity theft
+
+The root cause was in `server/routers/auth.ts`, where SSNs were inserted into the database without any hashing or encryption:
+
+```typescript
+await db.insert(users).values({
+  ...input,
+  password: hashedPassword,
+  // ssn was stored in plaintext here
+});
+```
+
+Additionally, SSNs were being returned in user objects, potentially exposing them in API responses.
+
+#### Solution
+
+Created a dedicated security utility `lib/security/ssn.ts` with functions to hash and verify SSNs using bcrypt (the same secure hashing algorithm used for passwords). The solution:
+
+1. **Hashes SSNs before storage**: Uses bcrypt with 10 salt rounds to hash SSNs before storing in the database
+2. **One-way hashing**: SSNs cannot be reversed from the hash, ensuring they cannot be extracted even if the database is compromised
+3. **Verification capability**: Provides a `verifySSN` function for identity verification if needed in the future
+4. **Removes SSNs from API responses**: Ensures SSNs are never returned in user objects
+
+The fix is integrated into the signup mutation at `server/routers/auth.ts`:
+
+```typescript
+import { hashSSN } from "@/lib/security/ssn";
+
+// In signup mutation:
+const hashedPassword = await bcrypt.hash(input.password, 10);
+const hashedSSN = await hashSSN(input.ssn);
+
+await db.insert(users).values({
+  ...input,
+  password: hashedPassword,
+  ssn: hashedSSN, // Now stored as hash, not plaintext
+});
+
+// SSN is excluded from response
+return { user: { ...user, password: undefined, ssn: undefined }, token };
+```
+
+This ensures that:
+- SSNs are never stored in plaintext in the database
+- Even with database access, SSNs cannot be extracted
+- SSNs are never returned in API responses
+- The hashing uses industry-standard bcrypt algorithm
+- Each SSN gets a unique hash due to salt, preventing rainbow table attacks
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Always Hash Sensitive Data**: Never store PII (Personally Identifiable Information) like SSNs, credit card numbers, or other sensitive data in plaintext
+2. **Use Industry-Standard Algorithms**: Use proven cryptographic hashing algorithms like bcrypt, scrypt, or Argon2 for sensitive data
+3. **Salt All Hashes**: Ensure hashing algorithms use salts to prevent rainbow table attacks
+4. **Never Return Sensitive Data**: Always exclude sensitive fields from API responses and database queries
+5. **Data Classification**: Classify data by sensitivity level and apply appropriate security measures
+6. **Compliance Awareness**: Understand regulatory requirements (GDPR, CCPA, PCI DSS, GLBA) for handling sensitive data
+7. **Security Audits**: Regularly audit database schemas and API responses to ensure no sensitive data is exposed
+8. **Encryption at Rest**: Consider additional encryption at the database level for extra protection
+9. **Access Controls**: Implement strict access controls and audit logging for database access
+10. **Data Minimization**: Only collect and store sensitive data that is absolutely necessary
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/ssn-security.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 15 test cases organized into 5 categories:
+
+1. **SSN Hashing**: 4 tests that verify SSNs are properly hashed and never stored in plaintext
+2. **SSN Verification**: 4 tests that verify SSN verification works correctly for identity checks
+3. **Security Properties**: 3 tests that verify the security properties of the hashing (non-reversible, secure algorithm, etc.)
+4. **Database Storage Simulation**: 2 tests that simulate database storage and verify SSNs cannot be extracted
+5. **Compliance and Privacy**: 2 tests that ensure compliance with privacy regulations and prevent enumeration attacks
+
+**Test Results:**
+
+All 15 tests pass successfully, confirming that:
+- SSNs are hashed before storage (never in plaintext)
+- Hashed SSNs cannot be reversed to plaintext
+- SSN verification works correctly when needed
+- Different SSNs produce different hashes
+- Same SSN produces different hashes (due to salt) but both verify correctly
+- The hashing uses secure bcrypt algorithm with proper salt rounds
+- SSNs cannot be extracted from database dumps
+- The fix prevents the original security vulnerability from recurring

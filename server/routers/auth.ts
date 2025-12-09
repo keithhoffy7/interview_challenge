@@ -6,6 +6,7 @@ import { publicProcedure, router } from "../trpc";
 import { db } from "@/lib/db";
 import { users, sessions } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { hashSSN } from "@/lib/security/ssn";
 
 export const authRouter = router({
   signup: publicProcedure
@@ -35,10 +36,12 @@ export const authRouter = router({
       }
 
       const hashedPassword = await bcrypt.hash(input.password, 10);
+      const hashedSSN = await hashSSN(input.ssn);
 
       await db.insert(users).values({
         ...input,
         password: hashedPassword,
+        ssn: hashedSSN,
       });
 
       // Fetch the created user
@@ -72,7 +75,7 @@ export const authRouter = router({
         (ctx.res as Headers).set("Set-Cookie", `session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800`);
       }
 
-      return { user: { ...user, password: undefined }, token };
+      return { user: { ...user, password: undefined, ssn: undefined }, token };
     }),
 
   login: publicProcedure
@@ -120,7 +123,7 @@ export const authRouter = router({
         (ctx.res as Headers).set("Set-Cookie", `session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800`);
       }
 
-      return { user: { ...user, password: undefined }, token };
+      return { user: { ...user, password: undefined, ssn: undefined }, token };
     }),
 
   logout: publicProcedure.mutation(async ({ ctx }) => {

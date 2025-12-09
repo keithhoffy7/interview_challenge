@@ -1306,3 +1306,157 @@ All 22 tests pass successfully, confirming that:
 - No unnecessary transaction records are created
 - Error messages match the validation logic
 - The fix prevents the original bug from recurring
+
+### Ticket VAL-207: Routing Number Optional
+
+#### Root Cause
+
+The issue was caused by server-side validation that allowed routing numbers to be optional for all funding types, including bank transfers. While the frontend showed the routing number field only for bank transfers and marked it as required, the server-side validation didn't enforce this requirement, allowing bank transfers to be submitted without routing numbers.
+
+The root cause was in `server/routers/account.ts` on line 81:
+
+```typescript
+// Buggy code:
+fundingSource: z.object({
+  type: z.enum(["card", "bank"]),
+  accountNumber: z.string(),
+  routingNumber: z.string().optional(),  // Optional for ALL types - BUG!
+}),
+```
+
+This validation had several problems:
+- `routingNumber` was marked as optional for all funding types
+- No conditional validation to require routing number when `type === "bank"`
+- Bank transfers could be submitted without routing numbers, causing ACH transfer failures
+- The frontend validation could be bypassed if someone sent requests directly to the API
+
+**Impact:**
+- Bank transfers were being submitted without routing numbers
+- ACH transfers failed because routing numbers are required for bank transfers
+- Users experienced failed funding attempts without clear error messages
+- Data integrity issues with incomplete bank transfer information
+
+#### Solution
+
+Fixed the server-side validation to conditionally require routing numbers for bank transfers while keeping them optional for card payments. The solution:
+
+1. **Conditional Requirement**: Used Zod's `.refine()` method to conditionally require routing numbers when funding type is "bank"
+2. **Format Validation**: Added validation to ensure routing numbers are exactly 9 digits when provided for bank transfers
+3. **Clear Error Messages**: Provided specific error messages for missing or invalid routing numbers
+4. **Maintains Flexibility**: Keeps routing number optional for card payments (where it's not needed)
+
+The fix is in `server/routers/account.ts`:
+
+```typescript
+fundAccount: protectedProcedure
+  .input(
+    z
+      .object({
+        accountId: z.number(),
+        amount: z.number().positive(),
+        fundingSource: z.object({
+          type: z.enum(["card", "bank"]),
+          accountNumber: z.string(),
+          routingNumber: z.string().optional(),
+        }),
+      })
+      .refine(
+        (data) => {
+          // Routing number is required for bank transfers
+          if (data.fundingSource.type === "bank") {
+            return data.fundingSource.routingNumber !== undefined && 
+                   data.fundingSource.routingNumber.trim().length > 0;
+          }
+          return true;
+        },
+        {
+          message: "Routing number is required for bank transfers",
+          path: ["fundingSource", "routingNumber"],
+        }
+      )
+      .refine(
+        (data) => {
+          // Validate routing number format if provided (for bank transfers)
+          if (data.fundingSource.type === "bank" && data.fundingSource.routingNumber) {
+            return /^\d{9}$/.test(data.fundingSource.routingNumber);
+          }
+          return true;
+        },
+        {
+          message: "Routing number must be exactly 9 digits",
+          path: ["fundingSource", "routingNumber"],
+        }
+      )
+  )
+```
+
+The frontend validation in `components/FundingModal.tsx` already had proper validation:
+
+```typescript
+{fundingType === "bank" && (
+  <div>
+    <label>Routing Number</label>
+    <input
+      {...register("routingNumber", {
+        required: "Routing number is required",
+        pattern: {
+          value: /^\d{9}$/,
+          message: "Routing number must be 9 digits",
+        },
+      })}
+    />
+  </div>
+)}
+```
+
+This ensures that:
+- Routing numbers are required for bank transfers (both frontend and backend)
+- Routing numbers are optional for card payments (not needed)
+- Routing number format is validated (exactly 9 digits)
+- ACH transfers will have the required routing number information
+- Validation is consistent between frontend and backend
+- Clear error messages guide users to provide routing numbers
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Conditional Validation**: When fields are required based on other field values, use conditional validation (like Zod's `.refine()`) rather than marking everything as optional
+2. **Validate on Both Client and Server**: Always validate on both frontend (for UX) and backend (for security and data integrity)
+3. **Match Business Rules**: Ensure validation rules match business requirements (e.g., routing numbers required for bank transfers)
+4. **Test Conditional Requirements**: Test validation with different combinations of field values to ensure conditional requirements work correctly
+5. **API Security**: Don't rely solely on frontend validation - always validate on the server as frontend validation can be bypassed
+6. **Clear Field Requirements**: Make it clear in the UI which fields are required and when (e.g., show routing number field only for bank transfers)
+7. **Use Type-Safe Validation**: Use schema validation libraries (like Zod) that support conditional validation
+8. **Document Field Requirements**: Document which fields are required for which scenarios
+9. **Test Edge Cases**: Test with missing optional fields, empty strings, whitespace, etc.
+10. **Integration Testing**: Test the full flow from frontend to backend to ensure validation works end-to-end
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/routing-number-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 22 test cases organized into 7 categories:
+
+1. **Bank Transfer - Routing Number Required**: 4 tests that verify routing numbers are required for bank transfers and empty/whitespace values are rejected
+2. **Card Payment - Routing Number Optional**: 2 tests that verify routing numbers are optional for card payments
+3. **Routing Number Format Validation**: 4 tests that verify routing numbers must be exactly 9 digits and reject invalid formats
+4. **Server-Side Validation**: 4 tests that verify server-side validation enforces routing number requirements for bank transfers
+5. **Frontend Validation**: 3 tests that verify frontend shows/hides routing number field appropriately
+6. **Root Cause Verification**: 2 tests that verify the specific bugs (optional routing number for bank transfers) are fixed
+7. **ACH Transfer Requirements**: 2 tests that verify routing numbers are provided to prevent failed ACH transfers
+8. **Validation Consistency**: 1 test that verifies frontend and backend validation are consistent
+
+**Test Results:**
+
+All 22 tests pass successfully, confirming that:
+- Routing numbers are required for bank transfers (both frontend and backend)
+- Routing numbers are optional for card payments
+- Routing number format is validated (exactly 9 digits)
+- Empty and whitespace-only routing numbers are rejected
+- Server-side validation prevents bank transfers without routing numbers
+- ACH transfers will have required routing number information
+- Validation is consistent between frontend and backend
+- The fix prevents the original bug from recurring

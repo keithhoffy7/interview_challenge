@@ -72,15 +72,42 @@ export const accountRouter = router({
 
   fundAccount: protectedProcedure
     .input(
-      z.object({
-        accountId: z.number(),
-        amount: z.number().positive(),
-        fundingSource: z.object({
-          type: z.enum(["card", "bank"]),
-          accountNumber: z.string(),
-          routingNumber: z.string().optional(),
-        }),
-      })
+      z
+        .object({
+          accountId: z.number(),
+          amount: z.number().positive(),
+          fundingSource: z.object({
+            type: z.enum(["card", "bank"]),
+            accountNumber: z.string(),
+            routingNumber: z.string().optional(),
+          }),
+        })
+        .refine(
+          (data) => {
+            // Routing number is required for bank transfers
+            if (data.fundingSource.type === "bank") {
+              return data.fundingSource.routingNumber !== undefined && data.fundingSource.routingNumber.trim().length > 0;
+            }
+            return true;
+          },
+          {
+            message: "Routing number is required for bank transfers",
+            path: ["fundingSource", "routingNumber"],
+          }
+        )
+        .refine(
+          (data) => {
+            // Validate routing number format if provided (for bank transfers)
+            if (data.fundingSource.type === "bank" && data.fundingSource.routingNumber) {
+              return /^\d{9}$/.test(data.fundingSource.routingNumber);
+            }
+            return true;
+          },
+          {
+            message: "Routing number must be exactly 9 digits",
+            path: ["fundingSource", "routingNumber"],
+          }
+        )
     )
     .mutation(async ({ input, ctx }) => {
       const amount = parseFloat(input.amount.toString());

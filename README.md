@@ -560,3 +560,104 @@ All 25 tests pass successfully, confirming that:
 - Transaction descriptions are safely rendered without XSS risk
 - Various attack payloads are properly escaped
 - The fix prevents the original XSS vulnerability from recurring
+
+### Ticket PERF-401: Account Creation Error
+
+#### Root Cause
+
+The issue was caused by a fallback object returned when account retrieval failed after creation. The code had a problematic pattern:
+
+1. **Account Insertion**: Account was correctly inserted into the database with `balance: 0` and `status: "active"`
+2. **Account Retrieval**: After insertion, the code attempted to fetch the created account
+3. **Fallback on Failure**: If the fetch returned `null` (database error, timing issue, etc.), instead of throwing an error, the code returned a fallback object with incorrect values:
+   - `balance: 100` (should be 0)
+   - `status: "pending"` (should be "active")
+   - `id: 0` (invalid ID)
+
+The root cause was in `server/routers/account.ts` on lines 57-67, where a fallback object was returned instead of proper error handling:
+
+```typescript
+return (
+  account || {
+    id: 0,
+    userId: ctx.user.id,
+    accountNumber: accountNumber!,
+    accountType: input.accountType,
+    balance: 100,  // WRONG - should be 0
+    status: "pending",  // WRONG - should be "active"
+    createdAt: new Date().toISOString(),
+  }
+);
+```
+
+This created a critical financial discrepancy where users would see an incorrect balance of $100 instead of the actual $0 balance in the database.
+
+#### Solution
+
+Removed the fallback object and implemented proper error handling. The fix:
+
+1. **Removed Fallback Object**: Eliminated the fallback that returned incorrect balance and status
+2. **Added Error Handling**: If account retrieval fails after creation, the code now throws a proper error
+3. **Ensures Data Consistency**: The returned account always matches what's actually in the database
+
+The fix is in `server/routers/account.ts`:
+
+```typescript
+// Fetch the created account
+const account = await db.select().from(accounts).where(eq(accounts.accountNumber, accountNumber!)).get();
+
+if (!account) {
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: "Account was created but could not be retrieved. Please refresh your accounts.",
+  });
+}
+
+return account;
+```
+
+This ensures that:
+- Accounts are always returned with the correct balance (0 for new accounts)
+- Accounts are always returned with the correct status ("active")
+- If database operations fail, users get a clear error message instead of incorrect data
+- Financial data displayed to users always matches the database state
+- No fake or fallback data is ever returned
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Never Return Fallback Data**: Don't return fake or default data when database operations fail - always throw errors
+2. **Verify Database Operations**: Always verify that database operations succeed and data can be retrieved
+3. **Financial Data Accuracy**: For financial applications, accuracy is critical - never guess or use fallback values for balances
+4. **Error Handling Best Practices**: Use proper error handling with descriptive messages instead of silent fallbacks
+5. **Data Consistency Checks**: Verify that returned data matches what was inserted/updated in the database
+6. **Transaction Safety**: Consider using database transactions to ensure atomicity of operations
+7. **Logging**: Log database operation failures for debugging and monitoring
+8. **Integration Testing**: Test database operations end-to-end to catch retrieval failures
+9. **Idempotency**: Ensure operations can be safely retried if they fail
+10. **User Communication**: Provide clear error messages to users when operations fail, rather than showing incorrect data
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/account-creation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 11 test cases organized into 5 categories:
+
+1. **Account Balance on Creation**: 3 tests that verify accounts are created with balance 0, not 100
+2. **Error Handling**: 2 tests that verify proper errors are thrown when account retrieval fails
+3. **Account Status**: 2 tests that verify accounts are created with status "active", not "pending"
+4. **Data Consistency**: 2 tests that verify returned account data matches database state
+5. **Financial Accuracy**: 2 tests that ensure balance accuracy is maintained (critical for financial apps)
+
+**Test Results:**
+
+All 11 tests pass successfully, confirming that:
+- New accounts are created with correct balance (0, not 100)
+- If account retrieval fails, proper error is thrown (not fake balance)
+- Account status is correct ("active", not "pending")
+- Returned account data always matches database state
+- Financial data accuracy is maintained
+- The fix prevents the original bug from recurring

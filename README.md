@@ -173,3 +173,104 @@ All 27 tests pass successfully, confirming that:
 - Invalid date formats and invalid dates are caught
 - Edge cases are handled correctly (leap years, birthday calculations, etc.)
 - The validation prevents the original bug from recurring
+
+### Ticket VAL-206: Card Number Validation
+
+#### Root Cause
+
+The issue was caused by weak card number validation in the funding form. The validation only checked:
+1. That the card number was 16 digits long
+2. That it started with "4" (Visa) or "5" (Mastercard)
+
+This allowed many invalid card numbers to be accepted, including:
+- Numbers that failed the Luhn algorithm checksum (the standard validation algorithm for credit cards)
+- Numbers with incorrect lengths
+- Numbers from unsupported card types
+- Random sequences of digits that happened to match the basic pattern
+
+The root cause was in `components/FundingModal.tsx`, where the card number validation used only basic pattern matching and prefix checking, without implementing the industry-standard Luhn algorithm for checksum validation.
+
+#### Solution
+
+Created a dedicated validation function `validateCardNumber` in `lib/validation/cardNumber.ts` and integrated it into the funding modal. The validation function:
+
+1. **Validates format**: Removes spaces and dashes (common user input), then checks that only digits remain
+2. **Validates length**: Ensures card numbers are between 13-19 digits (standard card number lengths)
+3. **Validates card prefixes**: Checks for valid prefixes for major card types:
+   - Visa (starts with 4)
+   - Mastercard (starts with 51-55)
+   - American Express (starts with 34 or 37)
+   - Discover (starts with 6011 or 65)
+   - Diners Club (starts with 30, 36, 38, or 39)
+   - JCB (starts with 2131, 1800, or 35)
+4. **Validates using Luhn algorithm**: Implements the industry-standard Luhn (mod 10) checksum algorithm to detect invalid card numbers
+
+The validation is integrated into the funding form at `components/FundingModal.tsx`:
+
+```typescript
+<input
+  {...register("accountNumber", {
+    required: `${fundingType === "card" ? "Card" : "Account"} number is required`,
+    pattern: {
+      value: fundingType === "card" ? /^[\d\s-]+$/ : /^\d+$/,
+      message: fundingType === "card" ? "Card number contains invalid characters" : "Invalid account number",
+    },
+    validate: {
+      validCard: (value) => {
+        if (fundingType !== "card") return true;
+        return validateCardNumber(value);
+      },
+    },
+  })}
+  type="text"
+  className="..."
+  placeholder={fundingType === "card" ? "1234 5678 9012 3456" : "123456789"}
+/>
+```
+
+This ensures that:
+- Invalid card numbers are rejected before submission (preventing failed transactions)
+- Only valid card numbers that pass the Luhn algorithm are accepted
+- Users can enter card numbers with spaces or dashes (common formatting)
+- All major card types are supported
+- The validation is centralized and reusable
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Use Industry Standards**: Always implement the Luhn algorithm for card number validation - it's the industry standard and catches most invalid numbers
+2. **Comprehensive Validation**: Don't rely on simple pattern matching or length checks alone - implement proper checksum validation
+3. **Support Common Formats**: Allow users to enter card numbers with spaces or dashes, then normalize the input before validation
+4. **Card Type Detection**: Validate card prefixes to ensure only supported card types are accepted
+5. **Server-Side Validation**: Always validate card numbers server-side as well, as client-side validation can be bypassed
+6. **Test with Real Test Numbers**: Use known valid test card numbers from payment processors for testing (e.g., Stripe, PayPal test cards)
+7. **Error Messages**: Provide clear, specific error messages to help users understand what's wrong with their card number
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/card-number-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 51 test cases organized into 9 categories:
+
+1. **Valid Card Numbers (Luhn Algorithm)**: 10 tests that verify valid card numbers from all major card types pass validation
+2. **Invalid Card Numbers (Luhn Algorithm Failures)**: 5 tests that verify invalid checksums are rejected
+3. **Invalid Card Prefixes**: 4 tests that verify unsupported card types are rejected
+4. **Invalid Length Validation**: 5 tests that verify cards with incorrect lengths are rejected
+5. **Format Handling (Spaces and Dashes)**: 5 tests that verify spaces and dashes are handled correctly
+6. **Invalid Format Validation**: 4 tests that verify invalid characters and formats are rejected
+7. **Card Type Validation**: 12 tests that verify all supported card types and their prefixes work correctly
+8. **Edge Cases**: 4 tests that handle boundary conditions and edge cases
+9. **Real-World Scenarios**: 2 tests that verify obviously fake numbers are rejected and valid test numbers are accepted
+
+**Test Results:**
+
+All 51 tests pass successfully, confirming that:
+- Valid card numbers pass the Luhn algorithm validation
+- Invalid card numbers are properly rejected (preventing failed transactions)
+- All major card types (Visa, Mastercard, Amex, Discover, Diners Club, JCB) are supported
+- Format variations (spaces, dashes) are handled correctly
+- Invalid formats, lengths, and prefixes are caught
+- The validation prevents the original bug from recurring

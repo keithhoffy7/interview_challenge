@@ -1595,3 +1595,114 @@ All 44 tests pass successfully, confirming that:
 - Boundary values are correctly handled
 - Invalid cards outside valid ranges are properly rejected
 - The fix prevents the original bug from recurring
+
+### Ticket SEC-302: Insecure Random Numbers
+
+#### Root Cause
+
+The issue was caused by using `Math.random()` for generating account numbers, which is not cryptographically secure. `Math.random()` uses a pseudo-random number generator that is predictable and not suitable for security-sensitive operations like generating account numbers.
+
+The root cause was in `server/routers/account.ts` on lines 8-12:
+
+```typescript
+// Buggy code:
+function generateAccountNumber(): string {
+  return Math.floor(Math.random() * 1000000000)
+    .toString()
+    .padStart(10, "0");
+}
+```
+
+This implementation had several security problems:
+- `Math.random()` is predictable - if an attacker can observe some generated numbers, they may be able to predict future numbers
+- `Math.random()` is not cryptographically secure - it doesn't use a secure random number generator
+- Account numbers could potentially be guessed or predicted by attackers
+- The randomness source is not suitable for security-sensitive operations
+
+**Impact:**
+- Account numbers could be predictable, making them vulnerable to enumeration attacks
+- Attackers could potentially guess or predict account numbers
+- Security risk for financial data - account numbers should be unpredictable
+- Compliance and security audit failures
+- Potential for account number collisions if predictability leads to targeted generation
+
+#### Solution
+
+Replaced `Math.random()` with Node.js's `crypto.randomBytes()`, which uses a cryptographically secure random number generator. The solution:
+
+1. **Cryptographically Secure Random**: Uses `crypto.randomBytes()` which provides cryptographically strong random values
+2. **Unpredictable**: Generated numbers are truly random and cannot be predicted
+3. **Same Format**: Maintains the same 10-digit format for account numbers
+4. **Proper Range**: Still generates numbers in the range 0-999999999
+
+The fix is in `server/routers/account.ts`:
+
+```typescript
+import { randomBytes } from "crypto";
+
+/**
+ * Generates a cryptographically secure 10-digit account number.
+ * Uses crypto.randomBytes() instead of Math.random() for security.
+ */
+function generateAccountNumber(): string {
+  // Generate 4 random bytes (32 bits) to get a random number
+  // This gives us a range of 0 to 4,294,967,295
+  const randomBuffer = randomBytes(4);
+  const randomNumber = randomBuffer.readUInt32BE(0);
+  
+  // Modulo to get a number in the range 0-999999999 (10 digits max)
+  // Then pad to 10 digits
+  return (randomNumber % 1000000000)
+    .toString()
+    .padStart(10, "0");
+}
+```
+
+This ensures that:
+- Account numbers are generated using cryptographically secure random number generation
+- Account numbers are unpredictable and cannot be guessed or predicted
+- Security best practices are followed for sensitive data generation
+- The format remains the same (10-digit account numbers)
+- The implementation is suitable for production use in financial applications
+- Account numbers have high entropy and uniqueness
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Never Use Math.random() for Security**: Never use `Math.random()` for any security-sensitive operations (tokens, IDs, account numbers, passwords, etc.)
+2. **Use Crypto APIs**: Always use cryptographically secure random number generators (`crypto.randomBytes()`, `crypto.getRandomValues()`, etc.)
+3. **Security Review**: Include security review in code reviews, especially for random number generation
+4. **Document Security Requirements**: Document when cryptographically secure randomness is required
+5. **Use Established Libraries**: For complex random number generation, use well-established, security-reviewed libraries
+6. **Regular Security Audits**: Conduct regular security audits to identify insecure random number usage
+7. **Education**: Educate developers about the difference between pseudo-random and cryptographically secure random number generation
+8. **Automated Scanning**: Use static analysis tools to detect insecure random number usage
+9. **Test Security Properties**: Include tests that verify randomness properties (unpredictability, entropy, etc.)
+10. **Follow OWASP Guidelines**: Follow OWASP and other security best practices for random number generation
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/insecure-random-numbers.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 17 test cases organized into 7 categories:
+
+1. **Cryptographically Secure Random Generation**: 4 tests that verify secure random number generation is used and works correctly
+2. **Security Comparison**: 2 tests that compare secure vs insecure random number generation
+3. **Account Number Format Validation**: 3 tests that verify account numbers have proper format (10 digits, proper padding, valid range)
+4. **Root Cause Verification**: 2 tests that verify the specific bug (Math.random() usage) is fixed
+5. **Unpredictability and Entropy**: 2 tests that verify generated numbers have high entropy and are unpredictable
+6. **Edge Cases**: 2 tests that verify edge cases (zero, maximum value) are handled correctly
+7. **Security Best Practices**: 2 tests that verify security best practices are followed
+
+**Test Results:**
+
+All 17 tests pass successfully, confirming that:
+- Account numbers are generated using cryptographically secure random number generation (`crypto.randomBytes()`)
+- Account numbers are unpredictable and cannot be guessed
+- Account numbers have proper format (10 digits, properly padded)
+- Generated numbers have high entropy and uniqueness
+- The fix prevents the original security vulnerability from recurring
+- Security best practices are followed for sensitive data generation

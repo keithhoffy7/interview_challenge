@@ -4,9 +4,21 @@ import { protectedProcedure, router } from "../trpc";
 import { db } from "@/lib/db";
 import { accounts, transactions } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { randomBytes } from "crypto";
 
+/**
+ * Generates a cryptographically secure 10-digit account number.
+ * Uses crypto.randomBytes() instead of Math.random() for security.
+ */
 function generateAccountNumber(): string {
-  return Math.floor(Math.random() * 1000000000)
+  // Generate 4 random bytes (32 bits) to get a random number
+  // This gives us a range of 0 to 4,294,967,295
+  const randomBuffer = randomBytes(4);
+  const randomNumber = randomBuffer.readUInt32BE(0);
+
+  // Modulo to get a number in the range 0-999999999 (10 digits max)
+  // Then pad to 10 digits
+  return (randomNumber % 1000000000)
     .toString()
     .padStart(10, "0");
 }

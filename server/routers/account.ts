@@ -132,7 +132,7 @@ export const accountRouter = router({
         });
       }
 
-      // Update account balance
+      // Update account balance atomically to prevent race conditions
       await db
         .update(accounts)
         .set({
@@ -140,14 +140,23 @@ export const accountRouter = router({
         })
         .where(eq(accounts.id, input.accountId));
 
-      let finalBalance = account.balance;
-      for (let i = 0; i < 100; i++) {
-        finalBalance = finalBalance + amount / 100;
+      // Fetch the updated balance from the database to ensure accuracy
+      const updatedAccount = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, input.accountId))
+        .get();
+
+      if (!updatedAccount) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Account balance was updated but could not be retrieved",
+        });
       }
 
       return {
         transaction,
-        newBalance: finalBalance, // This will be slightly off due to float precision
+        newBalance: updatedAccount.balance,
       };
     }),
 

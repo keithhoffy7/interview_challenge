@@ -1835,3 +1835,115 @@ All 16 tests pass successfully, confirming that:
 - Session invalidation only affects the specific user (not other users)
 - Session lifecycle (creation, invalidation, logout) works correctly
 - The fix prevents the original security vulnerability from recurring
+
+### Ticket PERF-403: Session Expiry
+
+#### Root Cause
+
+The issue was caused by session validation that checked if a session's expiry time was greater than the current time, without any buffer period. This meant sessions were considered valid until the exact millisecond of expiration, creating a security risk where sessions could expire during request processing or near expiration time.
+
+The root cause was in `server/trpc.ts` on line 57:
+
+```typescript
+// Buggy code:
+if (session && new Date(session.expiresAt) > new Date()) {
+  user = await db.select().from(users).where(eq(users.id, decoded.userId)).get();
+  const expiresIn = new Date(session.expiresAt).getTime() - new Date().getTime();
+  if (expiresIn < 60000) {
+    console.warn("Session about to expire");
+  }
+}
+```
+
+This implementation had several problems:
+- Sessions were valid until the exact expiry time (no buffer)
+- Sessions expiring in 1 second were still considered valid
+- No security margin for clock skew between servers
+- Risk of sessions expiring during long-running requests
+- Warning was logged but session was still accepted
+
+**Impact:**
+- Security risk near session expiration - sessions could be used until the exact millisecond
+- Potential for sessions to expire during request processing, causing inconsistent behavior
+- No buffer time to account for clock differences between servers
+- Sessions near expiration (e.g., 1 second remaining) were still accepted
+- Security vulnerability where expired sessions might be briefly accepted
+
+#### Solution
+
+Added a 5-minute buffer time before session expiration. Sessions are now considered expired 5 minutes before their actual expiry time, providing a security margin and preventing sessions from expiring during request processing.
+
+The solution:
+
+1. **Buffer Time**: Added a 5-minute buffer before actual expiration
+2. **Early Expiration**: Sessions are considered expired 5 minutes before actual expiry
+3. **Security Margin**: Provides margin for clock skew and long-running requests
+4. **Consistent Behavior**: Prevents sessions from expiring during request processing
+
+The fix is in `server/trpc.ts`:
+
+```typescript
+if (session) {
+  // Add a 5-minute buffer before expiration for security
+  // Sessions are considered expired 5 minutes before actual expiry time
+  const bufferTime = 5 * 60 * 1000; // 5 minutes in milliseconds
+  const expirationTime = new Date(session.expiresAt).getTime();
+  const currentTime = new Date().getTime();
+  const timeUntilExpiration = expirationTime - currentTime;
+
+  // Session is valid if it hasn't expired (with buffer)
+  if (timeUntilExpiration > bufferTime) {
+    user = await db.select().from(users).where(eq(users.id, decoded.userId)).get();
+  }
+}
+```
+
+This ensures that:
+- Sessions are considered expired 5 minutes before actual expiry time
+- Security margin prevents sessions from expiring during request processing
+- Clock skew between servers is accounted for
+- Sessions near expiration are properly rejected
+- Consistent behavior - sessions don't expire mid-request
+- Security risk from expiring sessions is mitigated
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Add Buffer Time**: Always add a buffer time before session expiration (e.g., 5 minutes) for security
+2. **Early Expiration**: Consider sessions expired slightly before actual expiry time
+3. **Account for Clock Skew**: Buffer time helps account for clock differences between servers
+4. **Prevent Mid-Request Expiration**: Buffer ensures sessions don't expire during long-running requests
+5. **Security Best Practices**: Follow security best practices for session expiration handling
+6. **Test Edge Cases**: Test sessions near expiration, at buffer boundary, and already expired
+7. **Document Buffer Time**: Document the buffer time and why it's needed
+8. **Monitor Session Expiration**: Monitor and log session expiration events
+9. **Consistent Validation**: Use consistent session validation logic across the application
+10. **Review Session Policies**: Regularly review session expiration policies and buffer times
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/session-expiry.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 16 test cases organized into 6 categories:
+
+1. **Buffer Time Before Expiration**: 4 tests that verify sessions are expired 5 minutes before actual expiry
+2. **Security Near Expiration**: 2 tests that verify sessions expiring in less than buffer time are rejected
+3. **Root Cause Verification**: 2 tests that verify the specific bugs (sessions valid until exact expiry) are fixed
+4. **Edge Cases**: 4 tests that verify edge cases (already expired, far future, boundary conditions)
+5. **Security Benefits**: 2 tests that verify security benefits (prevent mid-request expiration, clock skew margin)
+6. **Time Calculations**: 2 tests that verify time calculations are correct
+
+**Test Results:**
+
+All 16 tests pass successfully, confirming that:
+- Sessions are considered expired 5 minutes before actual expiry time
+- Sessions expiring in less than 5 minutes are rejected
+- Sessions with more than 5 minutes remaining are accepted
+- Buffer time boundary conditions are handled correctly
+- Already expired sessions are properly rejected
+- Security benefits (mid-request expiration prevention, clock skew margin) are provided
+- Time calculations are correct
+- The fix prevents the original security risk from recurring

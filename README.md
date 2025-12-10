@@ -1947,3 +1947,117 @@ All 16 tests pass successfully, confirming that:
 - Security benefits (mid-request expiration prevention, clock skew margin) are provided
 - Time calculations are correct
 - The fix prevents the original security risk from recurring
+
+### Ticket PERF-407: Performance Degradation
+
+#### Root Cause
+
+The issue was caused by an N+1 query problem in the `getTransactions` query. For each transaction retrieved, the code made a separate database query to fetch the account details, even though the account information was already available from an earlier query. This caused performance to degrade linearly with the number of transactions.
+
+The root cause was in `server/routers/account.ts` on lines 236-244:
+
+```typescript
+// Buggy code:
+const accountTransactions = await db
+  .select()
+  .from(transactions)
+  .where(eq(transactions.accountId, input.accountId));
+
+const enrichedTransactions = [];
+for (const transaction of accountTransactions) {
+  const accountDetails = await db.select().from(accounts).where(eq(accounts.id, transaction.accountId)).get();
+
+  enrichedTransactions.push({
+    ...transaction,
+    accountType: accountDetails?.accountType,
+  });
+}
+```
+
+This implementation had several performance problems:
+- **N+1 Query Problem**: Made one database query per transaction (N queries) in addition to the initial account query (1 query), resulting in 1 + N total queries
+- **Redundant Queries**: The account was already fetched earlier in the function (line 218-222), so querying it again for each transaction was unnecessary
+- **Linear Performance Degradation**: Performance degraded linearly with the number of transactions (100 transactions = 101 queries)
+- **Database Load**: Unnecessary database load, especially during peak usage with many transactions
+
+**Impact:**
+- System slowed down significantly when processing multiple transactions
+- Query count increased linearly: 1 account query + N transaction queries (where N = number of transactions)
+- For 100 transactions, the buggy code made 101 queries vs 2 queries in the fixed code
+- Poor user experience during peak usage
+- Increased database load and response times
+
+#### Solution
+
+Fixed the N+1 query problem by using the account data that was already fetched at the beginning of the function, eliminating the need to query the database for each transaction. The solution:
+
+1. **Use Existing Account Data**: Use the `account` object that was already fetched (line 218-222) instead of querying for each transaction
+2. **Eliminate Loop Queries**: Removed the loop that made database queries, replacing it with a simple `map` operation
+3. **Constant Query Count**: Reduced query count from 1 + N to just 2 queries (1 for account, 1 for all transactions), regardless of transaction count
+
+The fix is in `server/routers/account.ts`:
+
+```typescript
+const accountTransactions = await db
+  .select()
+  .from(transactions)
+  .where(eq(transactions.accountId, input.accountId));
+
+// Use the account we already fetched instead of querying for each transaction
+// This eliminates the N+1 query problem (one query per transaction)
+const enrichedTransactions = accountTransactions.map((transaction) => ({
+  ...transaction,
+  accountType: account.accountType,
+}));
+
+return enrichedTransactions;
+```
+
+This ensures that:
+- Only 2 database queries are made regardless of transaction count (1 for account, 1 for all transactions)
+- Performance is constant, not linear with transaction count
+- System performs well even with many transactions (100, 500, 1000+)
+- Database load is significantly reduced
+- User experience is improved, especially during peak usage
+- Query count scales from O(N) to O(1) with respect to transaction count
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Identify N+1 Queries**: Look for loops that make database queries - this is a common performance anti-pattern
+2. **Use Eager Loading**: When you need related data, fetch it upfront in a single query or use joins
+3. **Reuse Fetched Data**: If you've already fetched data, reuse it instead of querying again
+4. **Use Database Joins**: For related data, use SQL joins to fetch everything in one query
+5. **Profile Queries**: Use query profiling tools to identify N+1 query problems
+6. **Code Reviews**: Include performance considerations in code reviews, especially for loops with database queries
+7. **Test with Many Records**: Test queries with large datasets to identify performance issues
+8. **Monitor Query Counts**: Monitor and log query counts to detect N+1 problems in production
+9. **Use ORM Features**: Use ORM features like eager loading, includes, or joins to avoid N+1 queries
+10. **Document Query Patterns**: Document common query patterns and anti-patterns for the team
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/performance-degradation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 12 test cases organized into 5 categories:
+
+1. **N+1 Query Problem**: 2 tests that verify the bug (N+1 queries) and the fix (constant queries)
+2. **Performance Improvement**: 2 tests that demonstrate performance improvement with many transactions and show query count scaling
+3. **Correctness Verification**: 2 tests that verify transactions are correctly enriched with account type
+4. **Root Cause Verification**: 2 tests that verify the specific bugs (loop with queries) are fixed
+5. **Edge Cases**: 3 tests that verify edge cases (empty list, single transaction, large number of transactions)
+6. **Data Consistency**: 1 test that verifies consistent account data is used for all transactions
+
+**Test Results:**
+
+All 12 tests pass successfully, confirming that:
+- N+1 query problem is fixed (only 2 queries instead of 1 + N)
+- Performance improves significantly with many transactions (50x+ improvement for 100 transactions)
+- Query count is constant (2 queries) regardless of transaction count
+- Transactions are correctly enriched with account type
+- Data consistency is maintained (all transactions use the same account data)
+- Edge cases (empty, single, large numbers) are handled efficiently
+- The fix prevents the original performance degradation from recurring

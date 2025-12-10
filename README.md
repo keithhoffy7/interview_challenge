@@ -2061,3 +2061,134 @@ All 12 tests pass successfully, confirming that:
 - Data consistency is maintained (all transactions use the same account data)
 - Edge cases (empty, single, large numbers) are handled efficiently
 - The fix prevents the original performance degradation from recurring
+
+### Ticket VAL-203: State Code Validation
+
+#### Root Cause
+
+The issue was caused by weak state code validation that only checked the format (2 uppercase letters) but did not validate against a list of actual US state codes. The validation accepted any 2-letter uppercase code, including invalid codes like "XX", "YY", "ZZ", etc.
+
+The root cause was in both `app/signup/page.tsx` and `server/routers/auth.ts`:
+
+```typescript
+// Buggy code (frontend):
+{...register("state", {
+  required: "State is required",
+  pattern: {
+    value: /^[A-Z]{2}$/,
+    message: "Use 2-letter state code",
+  },
+})}
+
+// Buggy code (backend):
+state: z.string().length(2).toUpperCase(),
+```
+
+This validation had several problems:
+- Only checked format (2 uppercase letters), not validity
+- Accepted any 2-letter code that matched the pattern (e.g., "XX", "YY", "ZZ")
+- No validation against actual US state codes
+- Invalid state codes could be stored in the database
+- Address verification issues for banking communications
+
+**Impact:**
+- Invalid state codes like "XX" were accepted
+- Users could enter fake or invalid state codes
+- Banking communications could fail due to invalid addresses
+- Data quality issues in the database
+- Potential compliance issues with address verification
+
+#### Solution
+
+Created a dedicated validation function `validateStateCode` that checks against a comprehensive list of valid US state codes (50 states + DC). The solution:
+
+1. **Valid State Code List**: Created a Set containing all 50 US states plus DC (51 total valid codes)
+2. **Format Validation**: Still validates format (2 letters, uppercase)
+3. **Validity Check**: Checks if the code exists in the valid state codes list
+4. **Case-Insensitive**: Accepts input in any case and normalizes to uppercase
+5. **Clear Error Messages**: Provides specific error messages for different validation failures
+
+The validation function is in `lib/validation/stateCode.ts`:
+
+```typescript
+const VALID_STATE_CODES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+  'DC', // District of Columbia
+]);
+
+export function validateStateCode(value: string): true | string {
+  if (!value) return "State code is required";
+  const normalized = value.trim().toUpperCase();
+  if (normalized.length !== 2) {
+    return "State code must be exactly 2 letters";
+  }
+  if (!/^[A-Z]{2}$/.test(normalized)) {
+    return "State code must contain only letters";
+  }
+  if (!VALID_STATE_CODES.has(normalized)) {
+    return `"${normalized}" is not a valid US state code`;
+  }
+  return true;
+}
+```
+
+The fix is integrated into:
+- **Frontend** (`app/signup/page.tsx`): Replaced pattern validation with `validate: validateStateCode`
+- **Backend** (`server/routers/auth.ts`): Added `.refine()` validation using `validateStateCode`
+
+This ensures that:
+- Only valid US state codes (50 states + DC) are accepted
+- Invalid codes like "XX" are properly rejected
+- Case-insensitive input is handled correctly
+- Clear error messages guide users to enter valid state codes
+- Address verification for banking communications will work correctly
+- Data quality is maintained in the database
+- Validation is consistent between frontend and backend
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Validate Against Known Values**: When validating codes or abbreviations, check against a list of valid values, not just format
+2. **Use Comprehensive Lists**: Maintain complete lists of valid codes (e.g., all 50 states + DC)
+3. **Validate on Both Client and Server**: Always validate on both frontend (for UX) and backend (for security)
+4. **Test Invalid Values**: Test with invalid but format-compliant values (e.g., "XX" for state codes)
+5. **Clear Error Messages**: Provide specific error messages that indicate what values are valid
+6. **Case Normalization**: Handle case-insensitive input by normalizing before validation
+7. **Keep Lists Updated**: If valid codes change (e.g., new states), update the validation list
+8. **Document Valid Values**: Document which values are accepted (e.g., list of valid state codes)
+9. **Use Enums or Constants**: Use enums or constants for valid values to ensure consistency
+10. **Integration Testing**: Test with real-world scenarios to ensure validation works end-to-end
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/state-code-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 20 test cases organized into 7 categories:
+
+1. **Valid US State Codes**: 3 tests that verify all 50 states and DC are accepted, and case-insensitive input works
+2. **Invalid State Codes**: 4 tests that verify invalid codes (XX, wrong length, non-letters) are rejected
+3. **Root Cause Verification**: 2 tests that verify the specific bugs (XX accepted, pattern-only validation insufficient) are fixed
+4. **Edge Cases**: 4 tests that verify edge cases (empty, whitespace, lowercase, mixed case) are handled correctly
+5. **Normalization**: 1 test that verifies state codes are normalized to uppercase
+6. **All Valid States**: 1 test that verifies all 51 valid codes (50 states + DC) are accepted
+7. **Error Messages**: 4 tests that verify clear, specific error messages are provided
+8. **Common Invalid Codes**: 1 test that verifies common invalid codes (XX, territories) are rejected
+
+**Test Results:**
+
+All 20 tests pass successfully, confirming that:
+- All 50 US states plus DC are accepted as valid state codes
+- Invalid codes like "XX" are properly rejected
+- Case-insensitive input is handled correctly (ca, Ca, CA all work)
+- Format validation (2 letters) is still enforced
+- Clear error messages guide users to valid state codes
+- Edge cases (empty, whitespace, wrong length) are handled correctly
+- Validation is comprehensive and prevents invalid state codes
+- The fix prevents the original bug from recurring

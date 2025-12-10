@@ -1706,3 +1706,132 @@ All 17 tests pass successfully, confirming that:
 - Generated numbers have high entropy and uniqueness
 - The fix prevents the original security vulnerability from recurring
 - Security best practices are followed for sensitive data generation
+
+### Ticket SEC-304: Session Management
+
+#### Root Cause
+
+The issue was caused by the session management system allowing multiple valid sessions per user without invalidating old sessions when new ones were created. When a user logged in or signed up, a new session was created and inserted into the database, but existing sessions for that user were not deleted, allowing multiple concurrent active sessions.
+
+The root cause was in `server/routers/auth.ts` in both the `signup` and `login` mutations:
+
+```typescript
+// Buggy code (signup and login):
+const expiresAt = new Date();
+expiresAt.setDate(expiresAt.getDate() + 7);
+
+await db.insert(sessions).values({
+  userId: user.id,
+  token,
+  expiresAt: expiresAt.toISOString(),
+});
+// Missing: No invalidation of existing sessions
+```
+
+This implementation had several security problems:
+- Multiple active sessions could exist simultaneously for the same user
+- Old session tokens remained valid even after new logins
+- If an old session token was compromised, it could still be used even after the user logged in again
+- No mechanism to invalidate old sessions when creating new ones
+- Security risk from unauthorized access using old session tokens
+
+**Impact:**
+- Users could have multiple active sessions at the same time
+- Compromised old session tokens could still be used for unauthorized access
+- Session hijacking risk - attackers could use any of multiple active sessions
+- Security audit failures - multiple valid sessions per user is a security vulnerability
+- Potential for unauthorized access if old tokens are not invalidated
+
+#### Solution
+
+Added session invalidation logic to delete all existing sessions for a user before creating a new one. This ensures only one active session per user at a time. The solution:
+
+1. **Session Invalidation**: Before creating a new session, delete all existing sessions for that user
+2. **Single Active Session**: Ensures only one active session per user at any given time
+3. **Security**: Prevents unauthorized access from old session tokens
+4. **Applies to Both Login and Signup**: Both authentication flows invalidate old sessions
+
+The fix is in `server/routers/auth.ts` for both `signup` and `login` mutations:
+
+```typescript
+// Signup mutation:
+const expiresAt = new Date();
+expiresAt.setDate(expiresAt.getDate() + 7);
+
+// Invalidate all existing sessions for this user before creating a new one
+// This ensures only one active session per user at a time
+await db.delete(sessions).where(eq(sessions.userId, user.id));
+
+await db.insert(sessions).values({
+  userId: user.id,
+  token,
+  expiresAt: expiresAt.toISOString(),
+});
+```
+
+```typescript
+// Login mutation:
+const expiresAt = new Date();
+expiresAt.setDate(expiresAt.getDate() + 7);
+
+// Invalidate all existing sessions for this user before creating a new one
+// This ensures only one active session per user at a time
+await db.delete(sessions).where(eq(sessions.userId, user.id));
+
+await db.insert(sessions).values({
+  userId: user.id,
+  token,
+  expiresAt: expiresAt.toISOString(),
+});
+```
+
+This ensures that:
+- Only one active session per user exists at any time
+- Old sessions are automatically invalidated when a new session is created
+- Compromised old session tokens cannot be used after a new login
+- Security risk from multiple valid sessions is eliminated
+- Session management follows security best practices
+- Users are protected from unauthorized access via old session tokens
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Single Session Policy**: Implement a policy that allows only one active session per user at a time
+2. **Session Invalidation**: Always invalidate old sessions when creating new ones (login, signup, password reset, etc.)
+3. **Session Management Best Practices**: Follow security best practices for session management (single session, proper invalidation, expiration)
+4. **Security Reviews**: Include session management in security reviews and audits
+5. **Test Session Scenarios**: Test scenarios with multiple logins, concurrent sessions, and session invalidation
+6. **Document Session Policy**: Document the session management policy (single vs multiple sessions)
+7. **Monitor Active Sessions**: Implement monitoring to detect multiple active sessions per user
+8. **Session Expiration**: Ensure sessions expire properly and are cleaned up
+9. **Logout Functionality**: Ensure logout properly invalidates sessions
+10. **Security Headers**: Use secure session cookies (HttpOnly, SameSite, Secure flags)
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/session-management.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 16 test cases organized into 6 categories:
+
+1. **Single Session Per User**: 3 tests that verify only one active session per user is allowed
+2. **Session Invalidation on Login**: 2 tests that verify old sessions are invalidated on login
+3. **Session Invalidation on Signup**: 2 tests that verify session creation on signup works correctly
+4. **Security Implications**: 3 tests that verify security risks are prevented (unauthorized access, session hijacking, old token invalidation)
+5. **Root Cause Verification**: 2 tests that verify the specific bugs (multiple sessions, no invalidation) are fixed
+6. **Multiple Users Isolation**: 2 tests that verify session invalidation only affects the specific user
+7. **Session Lifecycle**: 2 tests that verify session creation, invalidation, and logout work correctly
+
+**Test Results:**
+
+All 16 tests pass successfully, confirming that:
+- Only one active session per user is allowed at any time
+- Old sessions are invalidated when new sessions are created (both login and signup)
+- Multiple concurrent sessions are prevented
+- Unauthorized access from old session tokens is prevented
+- Session hijacking from multiple active sessions is prevented
+- Session invalidation only affects the specific user (not other users)
+- Session lifecycle (creation, invalidation, logout) works correctly
+- The fix prevents the original security vulnerability from recurring

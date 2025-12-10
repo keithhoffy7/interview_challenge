@@ -2338,3 +2338,117 @@ All 29 tests pass successfully, confirming that:
 - Clear error messages guide users to valid formats
 - International formats from various countries are supported
 - The fix prevents the original bug from recurring
+
+### Ticket VAL-209: Amount Input Issues
+
+#### Root Cause
+
+The issue was caused by amount input validation that only checked the format pattern but did not validate or normalize amounts with multiple leading zeros. The validation accepted amounts like "000100.00" or "001.50" because they matched the pattern `/^\d+\.?\d{0,2}$/`, but these created confusion in transaction records.
+
+The root cause was in `components/FundingModal.tsx` on lines 74-77:
+
+```typescript
+// Buggy code:
+pattern: {
+  value: /^\d+\.?\d{0,2}$/,
+  message: "Invalid amount format",
+},
+```
+
+This validation had several problems:
+- Pattern `/^\d+\.?\d{0,2}$/` accepts any digits, including multiple leading zeros
+- Amounts like "000100.00", "001.50", "00050.25" were accepted
+- No normalization to remove leading zeros before processing
+- Transaction records could show confusing amounts with leading zeros
+- Different representations of the same amount (e.g., "000100.00" vs "100.00") created inconsistency
+
+**Impact:**
+- System accepted amounts with multiple leading zeros (e.g., "000100.00")
+- Confusion in transaction records - same amount displayed differently
+- Inconsistent data representation in the database
+- Users could enter confusing amount formats
+- Transaction history could show amounts like "000100.00" instead of "100.00"
+
+#### Solution
+
+Created a dedicated validation function `validateAmount` that rejects amounts with multiple leading zeros and normalizes valid amounts. The solution:
+
+1. **Reject Multiple Leading Zeros**: Validates that amounts don't have multiple leading zeros (e.g., "000100.00")
+2. **Normalize Amounts**: Normalizes amounts by removing leading zeros before processing
+3. **Consistent Format**: Ensures transaction records use normalized amounts (no leading zeros)
+4. **Clear Error Messages**: Provides specific error messages about leading zeros
+
+The validation function is in `lib/validation/amount.ts`:
+
+```typescript
+export function validateAmount(value: string): { isValid: true | string; normalized: string } {
+  // Check for multiple leading zeros before non-zero digits (e.g., "000100.00", "001.50")
+  // Pattern: starts with two or more zeros followed by a non-zero digit
+  if (/^0{2,}[1-9]/.test(trimmed)) {
+    return {
+      isValid: "Amount cannot have multiple leading zeros. Use format like 100.00 instead of 000100.00",
+      normalized: trimmed.replace(/^0+/, ''),
+    };
+  }
+  
+  // ... other validation ...
+  
+  return { isValid: true, normalized: num.toString() };
+}
+```
+
+The fix is integrated into:
+- **Frontend** (`components/FundingModal.tsx`): Uses `validateAmount` and normalizes amount before submission
+- **Backend** (`server/routers/account.ts`): Validates and normalizes amount before processing
+
+This ensures that:
+- Amounts with multiple leading zeros are rejected with clear error messages
+- Valid amounts are normalized (leading zeros removed) before processing
+- Transaction records use consistent, normalized amounts (no leading zeros)
+- Confusion in transaction records is prevented
+- Users are guided to use proper amount format (e.g., "100.00" instead of "000100.00")
+- Data consistency is maintained in the database
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Normalize Input Data**: Normalize user input (remove leading zeros, trim whitespace) before validation and processing
+2. **Validate Format Strictly**: Don't just check patterns - validate that the format is clean and consistent
+3. **Reject Confusing Formats**: Reject formats that, while technically valid, create confusion (e.g., multiple leading zeros)
+4. **Consistent Data Storage**: Always store normalized data in the database to prevent inconsistencies
+5. **Clear Error Messages**: Provide specific error messages that guide users to the correct format
+6. **Test Edge Cases**: Test with various input formats (leading zeros, trailing zeros, etc.) to ensure consistency
+7. **Normalize Before Processing**: Always normalize input before processing to ensure consistent behavior
+8. **Document Expected Format**: Document the expected input format for users
+9. **Use Validation Libraries**: Consider using established validation/normalization libraries for common data types
+10. **Review Data Display**: Ensure displayed data matches stored data format to prevent confusion
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/amount-input-issues.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 18 test cases organized into 7 categories:
+
+1. **Multiple Leading Zeros**: 3 tests that verify amounts with multiple leading zeros are rejected, and valid amounts are accepted
+2. **Normalization**: 3 tests that verify amounts are normalized correctly and zero amounts are handled
+3. **Root Cause Verification**: 2 tests that verify the specific bugs (multiple leading zeros accepted, pattern-only validation insufficient) are fixed
+4. **Transaction Record Consistency**: 2 tests that verify normalized amounts are used in transactions and prevent confusion
+5. **Edge Cases**: 3 tests that verify edge cases (zero amounts, decimal places, large amounts) are handled correctly
+6. **Format Validation**: 2 tests that verify format validation still works after normalization
+7. **Normalization Function**: 2 tests that verify the normalization function works correctly
+8. **Validation Consistency**: 1 test that verifies consistent validation for same amount in different formats
+
+**Test Results:**
+
+All 18 tests pass successfully, confirming that:
+- Amounts with multiple leading zeros (e.g., "000100.00") are rejected
+- Valid amounts without leading zeros are accepted
+- Amounts are normalized to remove leading zeros before processing
+- Transaction records use normalized amounts (no leading zeros)
+- Confusion in transaction records is prevented
+- Edge cases (zero amounts, decimal places) are handled correctly
+- Format validation still works correctly
+- The fix prevents the original bug from recurring

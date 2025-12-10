@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { trpc } from "@/lib/trpc/client";
 import { validateCardNumber } from "@/lib/validation/cardNumber";
+import { validateAmount } from "@/lib/validation/amount";
 
 interface FundingModalProps {
   accountId: number;
@@ -38,7 +39,15 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
     setError("");
 
     try {
-      const amount = parseFloat(data.amount);
+      // Validate and normalize amount (removes leading zeros)
+      const amountValidation = validateAmount(data.amount);
+      if (amountValidation.isValid !== true) {
+        setError(amountValidation.isValid);
+        return;
+      }
+
+      // Use normalized amount
+      const amount = parseFloat(amountValidation.normalized);
 
       await fundAccountMutation.mutateAsync({
         accountId,
@@ -71,29 +80,9 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
               <input
                 {...register("amount", {
                   required: "Amount is required",
-                  pattern: {
-                    value: /^\d+\.?\d{0,2}$/,
-                    message: "Invalid amount format",
-                  },
-                  validate: {
-                    positive: (value) => {
-                      const num = parseFloat(value);
-                      if (isNaN(num) || num <= 0) {
-                        return "Amount must be greater than $0.00";
-                      }
-                      return true;
-                    },
-                    minimum: (value) => {
-                      const num = parseFloat(value);
-                      if (num < 0.01) {
-                        return "Amount must be at least $0.01";
-                      }
-                      return true;
-                    },
-                  },
-                  max: {
-                    value: 10000,
-                    message: "Amount cannot exceed $10,000",
+                  validate: (value) => {
+                    const validation = validateAmount(value);
+                    return validation.isValid;
                   },
                 })}
                 type="text"

@@ -122,7 +122,19 @@ export const accountRouter = router({
         )
     )
     .mutation(async ({ input, ctx }) => {
-      const amount = parseFloat(input.amount.toString());
+      // Normalize amount string to remove leading zeros
+      const amountStr = input.amount.toString().trim();
+      const normalizedAmountStr = amountStr.replace(/^0+/, '') || '0';
+
+      // Check for multiple leading zeros (should be normalized, but validate anyway)
+      if (/^0+[1-9]/.test(amountStr) || /^0+0*\./.test(amountStr)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Amount cannot have multiple leading zeros. Use format like 100.00 instead of 000100.00",
+        });
+      }
+
+      const amount = parseFloat(normalizedAmountStr);
 
       // Validate amount is positive (greater than 0)
       if (amount <= 0 || isNaN(amount)) {

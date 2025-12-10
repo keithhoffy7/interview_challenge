@@ -14,11 +14,22 @@ export default function DashboardPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
 
   const { data: accounts, refetch: refetchAccounts } = trpc.account.getAccounts.useQuery();
-  const logoutMutation = trpc.auth.logout.useMutation();
+  const utils = trpc.useUtils();
+  const logoutMutation = trpc.auth.logout.useMutation({
+    onSuccess: () => {
+      // Invalidate all queries to clear any cached user data
+      utils.invalidate();
+      // Small delay to ensure cookie is cleared before redirect
+      setTimeout(() => {
+        router.push("/");
+        // Force a hard refresh to ensure cookie is cleared
+        router.refresh();
+      }, 100);
+    },
+  });
 
   const handleLogout = async () => {
     await logoutMutation.mutateAsync();
-    router.push("/");
   };
 
   const formatCurrency = (amount: number) => {
@@ -70,9 +81,8 @@ export default function DashboardPage() {
                       <dd className="mt-1 text-sm text-gray-500">
                         Status:{" "}
                         <span
-                          className={`font-medium ${
-                            account.status === "active" ? "text-green-600" : "text-yellow-600"
-                          }`}
+                          className={`font-medium ${account.status === "active" ? "text-green-600" : "text-yellow-600"
+                            }`}
                         >
                           {account.status}
                         </span>

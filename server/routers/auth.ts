@@ -159,29 +159,82 @@ export const authRouter = router({
     }),
 
   logout: publicProcedure.mutation(async ({ ctx }) => {
-    if (ctx.user) {
-      // Delete session from database
-      let token: string | undefined;
-      if ("cookies" in ctx.req) {
-        token = (ctx.req as any).cookies.session;
-      } else {
-        const cookieHeader = ctx.req.headers.get?.("cookie") || (ctx.req.headers as any).cookie;
-        token = cookieHeader
-          ?.split("; ")
-          .find((c: string) => c.startsWith("session="))
-          ?.split("=")[1];
-      }
-      if (token) {
-        await db.delete(sessions).where(eq(sessions.token, token));
-      }
-    }
+    // Clear cookie regardless of session status (defense in depth)
+    // This ensures cookie is cleared even if session deletion fails
+    // Use Expires in the past to ensure immediate clearing across all browsers
+    const pastDate = new Date(0).toUTCString();
+    const clearCookieHeader = `session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0; Expires=${pastDate}`;
 
     if ("setHeader" in ctx.res) {
-      ctx.res.setHeader("Set-Cookie", `session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+      ctx.res.setHeader("Set-Cookie", clearCookieHeader);
     } else {
-      (ctx.res as Headers).set("Set-Cookie", `session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+      (ctx.res as Headers).set("Set-Cookie", clearCookieHeader);
     }
 
-    return { success: true, message: ctx.user ? "Logged out successfully" : "No active session" };
+    // If no user is logged in, return success (cookie already cleared)
+    if (!ctx.user) {
+      return { success: true, message: "No active session" };
+    }
+
+    // Get the session token using the same logic as createContext
+    let token: string | undefined;
+
+    // Extract cookie header using the same method as createContext
+    let cookieHeader = "";
+    if (ctx.req.headers?.cookie) {
+      // Next.js Pages request
+      cookieHeader = ctx.req.headers.cookie;
+    } else if (ctx.req.headers?.get) {
+      // Fetch request (App Router)
+      cookieHeader = ctx.req.headers.get("cookie") || "";
+    } else if ("cookies" in ctx.req && (ctx.req as any).cookies) {
+      // Direct cookies object
+      token = (ctx.req as any).cookies.session;
+    }
+
+    // Parse cookies if we have a cookie header
+    if (!token && cookieHeader) {
+      const cookiesObj = Object.fromEntries(
+        cookieHeader
+          .split("; ")
+          .filter(Boolean)
+          .map((c: string) => {
+            const [key, ...val] = c.split("=");
+            return [key, val.join("=")];
+          })
+      );
+      token = cookiesObj.session;
+    }
+
+    // If no token found but user exists, session might already be invalidated
+    // Still return success since cookie is cleared
+    if (!token) {
+      return { success: true, message: "Session token not found, but cookie cleared" };
+    }
+
+    // Verify session exists before deletion
+    const session = await db.select().from(sessions).where(eq(sessions.token, token)).get();
+
+    if (!session) {
+      // Session doesn't exist, but cookie already cleared
+      return { success: true, message: "Session already invalidated" };
+    }
+
+    // Delete session from database
+    await db.delete(sessions).where(eq(sessions.token, token));
+
+    // Verify session was actually deleted
+    const deletedSession = await db.select().from(sessions).where(eq(sessions.token, token)).get();
+
+    if (deletedSession) {
+      // Session still exists - deletion failed
+      // Cookie is already cleared, but we should still report the error
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Failed to delete session. Please try again.",
+      });
+    }
+
+    return { success: true, message: "Logged out successfully" };
   }),
 });

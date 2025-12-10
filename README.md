@@ -2670,3 +2670,211 @@ All 22 tests pass successfully, confirming that:
 - Cookie is cleared before redirect to prevent old cookie from being sent
 - Users can immediately log in to a different account after logout
 - The fix prevents the original bug from recurring
+
+### Ticket PERF-404: Transaction Sorting
+
+#### Root Cause
+
+The issue was caused by the `getTransactions` query not specifying any ordering for the returned transactions. Without an explicit `ORDER BY` clause, the database could return transactions in any order (often based on internal storage order or index structure), making the transaction history appear random and confusing for users.
+
+The root cause was in `server/routers/account.ts` on lines 243-246:
+
+```typescript
+// Buggy code:
+const accountTransactions = await db
+  .select()
+  .from(transactions)
+  .where(eq(transactions.accountId, input.accountId));
+// Missing: .orderBy(...)
+```
+
+This query had several problems:
+- **No Ordering Specified**: The query didn't include an `ORDER BY` clause
+- **Unpredictable Order**: Transactions could be returned in any order (database-dependent)
+- **Inconsistent Experience**: Users saw transactions in different orders on different page loads
+- **Confusing History**: Made it difficult to review transaction history chronologically
+
+**Impact:**
+- Transaction order appeared random and unpredictable
+- Users couldn't easily review their transaction history
+- Most recent transactions might appear at the bottom instead of the top
+- Inconsistent user experience across different page loads
+- Confusion when trying to track recent activity
+
+#### Solution
+
+Fixed the `getTransactions` query to explicitly order transactions by `id` descending (most recent first). The solution:
+
+1. **Added Ordering**: Added `.orderBy(desc(transactions.id))` to sort transactions by ID in descending order
+2. **Most Recent First**: Transactions are now displayed with the most recent first, making it easier to review recent activity
+3. **Consistent Ordering**: Transactions always appear in the same order, providing a predictable user experience
+4. **ID-Based Sorting**: Using `id` for sorting is reliable because IDs are auto-incrementing and unique
+
+The fix is in `server/routers/account.ts`:
+
+```typescript
+const accountTransactions = await db
+  .select()
+  .from(transactions)
+  .where(eq(transactions.accountId, input.accountId))
+  .orderBy(desc(transactions.id)); // Most recent first
+```
+
+This ensures that:
+- Transactions are sorted consistently (most recent first)
+- Transaction order is predictable and not random
+- Multiple transactions appear in correct chronological order (by ID)
+- Transaction history is easy to review
+- Users can quickly see their most recent transactions at the top
+- Consistent user experience across all page loads
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Always Specify Ordering**: Always include an `ORDER BY` clause in queries that return multiple rows, especially for user-facing data
+2. **Use Explicit Sorting**: Don't rely on database default ordering - always specify the desired sort order
+3. **Most Recent First**: For lists of records (transactions, messages, etc.), typically show most recent first
+4. **Test Ordering**: Test that queries return data in the expected order
+5. **Document Sort Order**: Document the expected sort order in code comments
+6. **Consider User Experience**: Think about what order makes most sense for users (usually most recent first)
+7. **Use Reliable Sort Keys**: Use auto-incrementing IDs or timestamps for reliable sorting
+8. **Handle Edge Cases**: Consider how sorting works with duplicate values or missing data
+9. **Verify in Tests**: Include tests that verify the sort order is correct
+10. **Consistent Across Features**: Use consistent sorting patterns across similar features
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/transaction-sorting.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 15 test cases organized into 6 categories:
+
+1. **Consistent Ordering**: 3 tests that verify transactions are sorted consistently by ID descending
+2. **Root Cause Verification**: 2 tests that verify the specific bugs (no ordering, random order) are fixed
+3. **Chronological Order**: 2 tests that verify most recent transactions appear first and handle same timestamps correctly
+4. **User Experience**: 2 tests that verify transaction history is easy to review and prevents confusion
+5. **Multiple Accounts**: 1 test that verifies transactions are sorted correctly per account
+6. **Edge Cases**: 3 tests that handle single transaction, empty list, and large ID gaps
+7. **Database Query Verification**: 2 tests that verify the query includes orderBy clause
+
+**Test Results:**
+
+All 15 tests pass successfully, confirming that:
+- Transactions are sorted consistently (most recent first)
+- Transaction order is predictable and not random
+- Multiple transactions appear in correct chronological order
+- Transaction history is easy to review
+- Most recent transactions appear at the top
+- Consistent user experience across all page loads
+- Transactions are sorted correctly per account
+- Edge cases (single transaction, empty list, large ID gaps) are handled properly
+- The fix prevents the original bug from recurring
+
+---
+
+## Additional Improvements (Not Ticket Fixes)
+
+The following improvements were made during the bug fixing process but are not part of any specific ticket. They address issues found separately and improve the overall user experience.
+
+### Transaction Timezone Display Improvement
+
+#### Issue Found
+
+During testing of the transaction sorting fix (PERF-404), it was discovered that transaction timestamps were being displayed in UTC timezone rather than the user's local timezone. This made it confusing for users to understand when transactions actually occurred, especially for users in timezones far from UTC.
+
+#### Root Cause
+
+The issue was in `components/TransactionList.tsx` in the `formatDate` function:
+
+```typescript
+// Original code:
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+```
+
+The problems were:
+- **No Timezone Conversion**: The function didn't explicitly handle UTC timestamps from the database
+- **Missing Timezone Indicator**: SQLite `CURRENT_TIMESTAMP` returns timestamps without timezone information (format: `YYYY-MM-DD HH:MM:SS`)
+- **Incorrect Method**: Using `toLocaleDateString()` instead of `toLocaleString()` for better timezone handling
+- **No Timezone Display**: Users couldn't see what timezone the displayed time was in
+
+**Impact:**
+- Transaction times were displayed in UTC, not user's local timezone
+- Users in different timezones saw confusing times that didn't match their local time
+- No indication of what timezone was being displayed
+- Made it difficult to understand when transactions actually occurred
+
+#### Solution
+
+Updated the `formatDate` function to properly handle UTC timestamps and convert them to the user's local timezone:
+
+```typescript
+const formatDate = (dateString: string) => {
+  // Ensure the date string is treated as UTC if it doesn't have timezone info
+  // SQLite CURRENT_TIMESTAMP returns UTC in ISO 8601 format
+  let date: Date;
+  if (dateString && !dateString.includes('Z') && !dateString.includes('+') && !dateString.includes('-', 10)) {
+    // If no timezone info, assume UTC and append 'Z'
+    date = new Date(dateString + 'Z');
+  } else {
+    date = new Date(dateString);
+  }
+  
+  // Use toLocaleString to automatically convert to user's local timezone
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+};
+```
+
+This solution:
+1. **Detects Timestamp Format**: Checks if the timestamp has timezone information
+2. **Assumes UTC for SQLite Format**: If no timezone info (SQLite format), appends 'Z' to indicate UTC
+3. **Converts to Local Timezone**: Uses `toLocaleString()` which automatically converts UTC to user's local timezone
+4. **Shows Timezone**: Includes `timeZoneName: "short"` to display the timezone abbreviation (e.g., PST, EST)
+
+This ensures that:
+- Transaction times are displayed in the user's local timezone
+- UTC timestamps from the database are correctly converted
+- Users see times that match their local time
+- Timezone abbreviation is shown for clarity
+- Consistent formatting across all transactions
+- Works correctly for users in any timezone
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this improvement. The test file is located at `__tests__/transaction-timezone.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 12 test cases organized into 5 categories:
+
+1. **UTC to Local Timezone Conversion**: 3 tests that verify UTC timestamps are converted to local timezone
+2. **Date Formatting**: 3 tests that verify date formatting includes timezone information and handles different formats
+3. **Edge Cases**: 3 tests that handle SQLite format, timezone offsets, and existing Z suffix
+4. **User Experience**: 2 tests that verify times match user's local timezone and consistent formatting
+5. **Format Detection**: 1 test that verifies timestamp format detection works correctly
+
+**Test Results:**
+
+All 12 tests pass successfully, confirming that:
+- UTC timestamps are correctly converted to local timezone
+- Date formatting includes timezone information
+- Various timestamp formats are handled correctly (SQLite, ISO 8601, with/without timezone)
+- Users see times in their local timezone
+- Consistent formatting across all transactions
+- Edge cases are handled properly

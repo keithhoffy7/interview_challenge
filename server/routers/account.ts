@@ -243,7 +243,8 @@ export const accountRouter = router({
       const accountTransactions = await db
         .select()
         .from(transactions)
-        .where(eq(transactions.accountId, input.accountId));
+        .where(eq(transactions.accountId, input.accountId))
+        .orderBy(desc(transactions.id));
 
       // Use the account we already fetched instead of querying for each transaction
       // This eliminates the N+1 query problem (one query per transaction)

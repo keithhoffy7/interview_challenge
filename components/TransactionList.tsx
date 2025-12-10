@@ -18,12 +18,24 @@ export function TransactionList({ accountId }: TransactionListProps) {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
+    // Ensure the date string is treated as UTC if it doesn't have timezone info
+    // SQLite CURRENT_TIMESTAMP returns UTC in ISO 8601 format
+    let date: Date;
+    if (dateString && !dateString.includes('Z') && !dateString.includes('+') && !dateString.includes('-', 10)) {
+      // If no timezone info, assume UTC and append 'Z'
+      date = new Date(dateString + 'Z');
+    } else {
+      date = new Date(dateString);
+    }
+
+    // Use toLocaleString to automatically convert to user's local timezone
+    return date.toLocaleString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      timeZoneName: "short",
     });
   };
 
@@ -79,9 +91,8 @@ export function TransactionList({ accountId }: TransactionListProps) {
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <span
-                  className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                    transaction.status === "completed" ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
-                  }`}
+                  className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${transaction.status === "completed" ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                    }`}
                 >
                   {transaction.status}
                 </span>

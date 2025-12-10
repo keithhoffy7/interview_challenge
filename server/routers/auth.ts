@@ -8,6 +8,7 @@ import { users, sessions } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { hashSSN } from "@/lib/security/ssn";
 import { validateStateCode, normalizeStateCode } from "@/lib/validation/stateCode";
+import { validatePhoneNumber } from "@/lib/validation/phoneNumber";
 
 export const authRouter = router({
   signup: publicProcedure
@@ -17,7 +18,17 @@ export const authRouter = router({
         password: z.string().min(8),
         firstName: z.string().min(1),
         lastName: z.string().min(1),
-        phoneNumber: z.string().regex(/^\+?\d{10,15}$/),
+        phoneNumber: z
+          .string()
+          .refine(
+            (val) => {
+              const result = validatePhoneNumber(val);
+              return result === true;
+            },
+            {
+              message: "Invalid phone number format",
+            }
+          ),
         dateOfBirth: z.string(),
         ssn: z.string().regex(/^\d{9}$/),
         address: z.string().min(1),

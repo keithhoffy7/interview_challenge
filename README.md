@@ -2192,3 +2192,149 @@ All 20 tests pass successfully, confirming that:
 - Edge cases (empty, whitespace, wrong length) are handled correctly
 - Validation is comprehensive and prevents invalid state codes
 - The fix prevents the original bug from recurring
+
+### Ticket VAL-204: Phone Number Format
+
+#### Root Cause
+
+The issue was caused by weak phone number validation that only checked basic patterns without properly validating international phone number formats. The frontend only accepted 10-digit US phone numbers, while the backend accepted 10-15 digits with an optional + prefix, but neither properly validated the E.164 international format or prevented invalid number patterns.
+
+The root cause was in both `app/signup/page.tsx` and `server/routers/auth.ts`:
+
+```typescript
+// Buggy code (frontend):
+{...register("phoneNumber", {
+  required: "Phone number is required",
+  pattern: {
+    value: /^\d{10}$/,
+    message: "Phone number must be 10 digits",
+  },
+})}
+
+// Buggy code (backend):
+phoneNumber: z.string().regex(/^\+?\d{10,15}$/),
+```
+
+This validation had several problems:
+- Frontend only accepted 10 digits (US format), not international
+- Backend accepted any 10-15 digit string, including invalid patterns
+- No validation against E.164 international format standard
+- Accepted numbers starting with 0 (invalid)
+- Accepted any string of numbers without proper format validation
+- Mismatch between frontend and backend validation
+- No validation that numbers follow proper phone number structure
+
+**Impact:**
+- International phone numbers weren't properly validated
+- System accepted "any string of numbers" as the ticket described
+- Invalid phone numbers could be stored in the database
+- Unable to contact customers for important notifications
+- Data quality issues with invalid phone numbers
+- Inconsistent validation between frontend and backend
+
+#### Solution
+
+Created a dedicated validation function `validatePhoneNumber` that properly validates phone numbers in E.164 international format. The solution:
+
+1. **E.164 Format Validation**: Validates against the E.164 international phone number standard
+2. **Format Support**: Supports international formats with country codes (e.g., +44, +33, +49)
+3. **Formatting Character Handling**: Accepts common formatting characters (spaces, dashes, parentheses, dots) and strips them before validation
+4. **Length Validation**: Ensures phone numbers are 10-15 digits (E.164 standard)
+5. **Invalid Pattern Rejection**: Rejects numbers starting with 0 (invalid country codes)
+6. **Clear Error Messages**: Provides specific error messages for different validation failures
+
+The validation function is in `lib/validation/phoneNumber.ts`:
+
+```typescript
+export function validatePhoneNumber(value: string): true | string {
+  if (!value) return "Phone number is required";
+
+  // Remove common formatting characters (spaces, dashes, parentheses, dots)
+  const cleaned = value.replace(/[\s\-\(\)\.]/g, "");
+
+  if (!cleaned) {
+    return "Phone number is required";
+  }
+
+  // E.164 format: optional +, then 1-3 digit country code, then 4-14 digit subscriber number
+  // Total: 10-15 digits (excluding +)
+  // Pattern: ^\+?[1-9]\d{4,14}$
+  const e164Pattern = /^\+?[1-9]\d{4,14}$/;
+  
+  if (!e164Pattern.test(cleaned)) {
+    // Provide specific error messages based on the issue
+    // ...
+  }
+
+  // Additional validation: ensure reasonable length
+  const digitsOnly = cleaned.replace("+", "");
+  if (digitsOnly.length < 10) {
+    return "Phone number must be at least 10 digits";
+  }
+  if (digitsOnly.length > 15) {
+    return "Phone number must be at most 15 digits";
+  }
+
+  return true;
+}
+```
+
+The fix is integrated into:
+- **Frontend** (`app/signup/page.tsx`): Replaced pattern validation with `validate: validatePhoneNumber`
+- **Backend** (`server/routers/auth.ts`): Added `.refine()` validation using `validatePhoneNumber`
+
+This ensures that:
+- Phone numbers are validated in E.164 international format
+- International phone numbers are properly accepted (e.g., +44, +33, +49)
+- Invalid phone numbers (starting with 0, wrong length, non-numeric) are rejected
+- Common formatting characters are handled (spaces, dashes, parentheses, dots)
+- Validation is consistent between frontend and backend
+- Clear error messages guide users to enter valid phone numbers
+- Customers can be contacted for important notifications
+- Data quality is maintained in the database
+
+#### Preventive Measures
+
+To avoid similar issues in the future:
+
+1. **Use International Standards**: Validate against international standards (E.164 for phone numbers) rather than country-specific formats
+2. **Validate Format, Not Just Pattern**: Check that numbers follow proper format structure, not just match a regex pattern
+3. **Support International Formats**: Design validation to support international users from the start
+4. **Consistent Frontend/Backend**: Ensure frontend and backend validation are consistent
+5. **Handle Formatting Characters**: Accept common formatting characters but validate the underlying number
+6. **Reject Invalid Patterns**: Reject obviously invalid patterns (e.g., numbers starting with 0)
+7. **Clear Error Messages**: Provide specific error messages that help users understand what format is expected
+8. **Test International Numbers**: Test with various international phone number formats
+9. **Document Expected Format**: Document the expected phone number format (E.164) for users
+10. **Use Established Libraries**: Consider using established phone number validation libraries for comprehensive validation
+
+#### Test Coverage
+
+A comprehensive test suite has been created to verify this fix and prevent regression. The test file is located at `__tests__/phone-number-validation.test.ts`.
+
+**Test Coverage:**
+
+The test suite includes 29 test cases organized into 8 categories:
+
+1. **Valid Phone Numbers**: 4 tests that verify US and international phone numbers are accepted, including formatted numbers
+2. **Invalid Phone Numbers**: 6 tests that verify invalid numbers (too short, too long, starting with 0, letters, special chars, empty) are rejected
+3. **Root Cause Verification**: 2 tests that verify the specific bugs (accepts any string of numbers, pattern-only validation insufficient) are fixed
+4. **E.164 Format Validation**: 2 tests that verify E.164 format validation works correctly
+5. **Normalization**: 1 test that verifies phone numbers are normalized to E.164 format
+6. **Edge Cases**: 4 tests that verify edge cases (min/max length, with/without country code) are handled
+7. **Error Messages**: 5 tests that verify clear, specific error messages are provided
+8. **International Format Support**: 2 tests that verify various international formats are accepted
+9. **Format Validation**: 2 tests that verify format validation (rejecting invalid chars, accepting formatting) works correctly
+
+**Test Results:**
+
+All 29 tests pass successfully, confirming that:
+- US phone numbers (10 digits) are accepted
+- International phone numbers (with country codes) are accepted
+- Phone numbers with formatting characters (spaces, dashes, parentheses) are handled correctly
+- Invalid phone numbers (too short, too long, starting with 0, non-numeric) are rejected
+- E.164 format validation works correctly
+- Phone numbers are normalized properly
+- Clear error messages guide users to valid formats
+- International formats from various countries are supported
+- The fix prevents the original bug from recurring

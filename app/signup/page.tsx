@@ -9,6 +9,7 @@ import { validateDateOfBirth } from "@/lib/validation/dateOfBirth";
 import { validatePassword } from "@/lib/validation/password";
 import { validateEmail } from "@/lib/validation/email";
 import { validateStateCode } from "@/lib/validation/stateCode";
+import { validatePhoneNumber } from "@/lib/validation/phoneNumber";
 
 type SignupFormData = {
   email: string;
@@ -163,13 +164,10 @@ export default function SignupPage() {
                 <input
                   {...register("phoneNumber", {
                     required: "Phone number is required",
-                    pattern: {
-                      value: /^\d{10}$/,
-                      message: "Phone number must be 10 digits",
-                    },
+                    validate: validatePhoneNumber,
                   })}
                   type="tel"
-                  placeholder="1234567890"
+                  placeholder="+14155552671 or 14155552671"
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border"
                 />
                 {errors.phoneNumber && <p className="mt-1 text-sm text-red-600">{errors.phoneNumber.message}</p>}
